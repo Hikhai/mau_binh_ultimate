@@ -114,7 +114,8 @@ class DQNAgent:
             
             with torch.no_grad():
                 state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-                q_values = self.policy_net(state_tensor).cpu().numpy()[0]
+                # Avoid requiring numpy at runtime by converting to native python list
+                q_values = self.policy_net(state_tensor).cpu().detach().tolist()[0]
                 
                 if valid_actions_mask is not None:
                     q_values = q_values * valid_actions_mask
@@ -204,7 +205,7 @@ class DQNAgent:
     
     def load(self, filepath: str):
         """Load model checkpoint"""
-        checkpoint = torch.load(filepath, map_location=self.device)
+        checkpoint = torch.load(filepath, map_location=self.device, weights_only=False)
         
         self.policy_net.load_state_dict(checkpoint['policy_net_state_dict'])
         self.target_net.load_state_dict(checkpoint['target_net_state_dict'])
