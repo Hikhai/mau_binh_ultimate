@@ -1,6 +1,7 @@
 """
 Professional Streamlit Web App for Mau Binh Solver
 Production-ready with analytics, monetization, and BEAUTIFUL CARD DISPLAY
+✅ All features: Type, Pick, Paste Image (Ctrl+V), AI Detection, Compare Modes
 """
 import streamlit as st
 import sys
@@ -226,7 +227,7 @@ st.markdown('<h1 class="main-header">🃏 Mậu Binh AI Solver Pro</h1>', unsafe
 st.markdown(
     '<p class="sub-header">'
     '⚡ Professional AI-powered Chinese Poker solver with beautiful card visualization<br>'
-    '🤖 Game Theory • Deep Learning • Monte Carlo Simulation'
+    '🤖 Game Theory • Deep Learning • Monte Carlo • AI Card Detection'
     '</p>',
     unsafe_allow_html=True
 )
@@ -300,10 +301,17 @@ with st.sidebar:
     with st.expander("❓ How to use"):
         st.markdown("""
         **Quick Start:**
-        1. Enter your 13 cards (or use examples)
+        1. Enter your 13 cards (Type, Pick, or Screenshot)
         2. Choose solver mode
         3. Click **SOLVE** 🚀
-        4. Get optimal arrangement with beautiful card display!
+        4. Get optimal arrangement!
+        
+        **📷 Screenshot Method (Fastest):**
+        1. `Win + Shift + S` to screenshot game
+        2. Go to "From Image" tab
+        3. Click paste area → `Ctrl+V`
+        4. AI detects cards automatically
+        5. Click "SOLVE NOW"
         
         **Card Format:**
         - `AS` = Ace of Spades ♠
@@ -311,8 +319,6 @@ with st.sidebar:
         - `QD` = Queen of Diamonds ♦
         - `JC` = Jack of Clubs ♣
         - `10S` = Ten of Spades ♠
-        
-        **Example:** `AS AH KD KC QS QH JD 10C 9S 8H 7D 6C 5S`
         """)
     
     with st.expander("🎯 Understanding Results"):
@@ -334,14 +340,11 @@ with st.sidebar:
 
 # ============== MAIN CONTENT ==============
 
-# Import image input component với error handling chi tiết
+# Import image input component
 IMAGE_INPUT_AVAILABLE = False
 image_input_component = None
 
 try:
-    import sys
-    import os
-    
     # Đảm bảo path đúng
     current_dir = os.path.dirname(os.path.abspath(__file__))
     components_dir = os.path.join(current_dir, 'components')
@@ -406,7 +409,7 @@ card_input = st.session_state.get('card_input', "AS AH KD KC QS QH JD 10C 9S 8H 
 # ===== CREATE TABS BASED ON AVAILABLE COMPONENTS =====
 if IMAGE_INPUT_AVAILABLE and PICKER_AVAILABLE:
     # All 3 tabs
-    tab1, tab2, tab3 = st.tabs(["✍️ Type Cards", "🎴 Click to Pick", "📷 From Image"])
+    tab1, tab2, tab3 = st.tabs(["✍️ Type Cards", "🎴 Click to Pick", "📷 Screenshot (Ctrl+V)"])
     
     # TAB 1: Type Cards
     with tab1:
@@ -456,10 +459,11 @@ if IMAGE_INPUT_AVAILABLE and PICKER_AVAILABLE:
                 st.session_state.cards_from_image = False
                 rerun()
     
-    # TAB 3: From Image (NEW!)
+    # TAB 3: Screenshot with Ctrl+V
     with tab3:
         if st.session_state.get('cards_from_image') and st.session_state.get('card_input'):
-            st.success(f"✅ **Cards detected from image!**")
+            # Cards already detected, ready to solve
+            st.success(f"✅ **13 cards detected! Ready to solve.**")
             st.code(st.session_state.card_input, language=None)
             
             col1, col2 = st.columns(2)
@@ -472,11 +476,14 @@ if IMAGE_INPUT_AVAILABLE and PICKER_AVAILABLE:
             with col2:
                 if st.button("📷 Detect Different Image", use_container_width=True, key="new_image"):
                     st.session_state.cards_from_image = False
+                    st.session_state.card_input = "AS AH KD KC QS QH JD 10C 9S 8H 7D 6C 5S"
                     rerun()
         else:
+            # Show detection interface
             detected_cards = image_input_component(key="main_image_input")
             
             if detected_cards:
+                # Cards just detected, update state and rerun
                 st.session_state.card_input = detected_cards
                 st.session_state.cards_from_image = True
                 st.session_state.cards_ready_from_picker = False
@@ -484,7 +491,7 @@ if IMAGE_INPUT_AVAILABLE and PICKER_AVAILABLE:
 
 elif IMAGE_INPUT_AVAILABLE and not PICKER_AVAILABLE:
     # 2 tabs: Type + Image
-    tab1, tab3 = st.tabs(["✍️ Type Cards", "📷 From Image"])
+    tab1, tab3 = st.tabs(["✍️ Type Cards", "📷 Screenshot (Ctrl+V)"])
     
     with tab1:
         col1, col2 = st.columns([4, 1])
@@ -507,7 +514,7 @@ elif IMAGE_INPUT_AVAILABLE and not PICKER_AVAILABLE:
     
     with tab3:
         if st.session_state.get('cards_from_image') and st.session_state.get('card_input'):
-            st.success(f"✅ **Cards detected from image!**")
+            st.success(f"✅ **Cards detected!**")
             st.code(st.session_state.card_input, language=None)
             
             col1, col2 = st.columns(2)
@@ -518,7 +525,7 @@ elif IMAGE_INPUT_AVAILABLE and not PICKER_AVAILABLE:
                     solve_button = True
             
             with col2:
-                if st.button("📷 Detect Different Image", use_container_width=True, key="new_image"):
+                if st.button("📷 Detect Different", use_container_width=True, key="new_image"):
                     st.session_state.cards_from_image = False
                     rerun()
         else:
@@ -554,7 +561,7 @@ elif PICKER_AVAILABLE and not IMAGE_INPUT_AVAILABLE:
     
     with tab2:
         if st.session_state.cards_ready_from_picker and st.session_state.get('card_input'):
-            st.success(f"✅ **Cards selected!** Ready to solve.")
+            st.success(f"✅ **Cards selected!**")
             st.code(st.session_state.card_input, language=None)
             
             col1, col2 = st.columns(2)
@@ -565,7 +572,7 @@ elif PICKER_AVAILABLE and not IMAGE_INPUT_AVAILABLE:
                     solve_button = True
             
             with col2:
-                if st.button("🔄 Pick Different Cards", use_container_width=True, key="pick_different"):
+                if st.button("🔄 Pick Different", use_container_width=True, key="pick_different"):
                     st.session_state.cards_ready_from_picker = False
                     st.session_state.picker_selected_cards = []
                     rerun()
@@ -616,7 +623,7 @@ if solve_button and card_input:
             error = f"Need exactly 13 cards, got {len(cards)}"
             st.error(f"❌ {error}")
         else:
-            # Show input cards preview (if visual available)
+            # Show input cards preview
             if VISUAL_CARDS_AVAILABLE:
                 st.markdown("### 🎴 Your Input Cards")
                 cards_strs = [str(c) for c in cards]
@@ -670,7 +677,7 @@ if solve_button and card_input:
             middle_strs = [str(c) for c in result.middle]
             front_strs = [str(c) for c in result.front]
             
-            # Render beautiful cards (or fallback to text)
+            # Render beautiful cards
             if VISUAL_CARDS_AVAILABLE:
                 st.markdown(
                     render_comparison_cards(
@@ -761,7 +768,6 @@ if solve_button and card_input:
             # Overall assessment
             st.markdown("### 🎯 Overall Assessment")
             
-            # Weighted score (front most important in Mau Binh)
             total_score = (front_wr * 0.4 + mid_wr * 0.3 + back_wr * 0.3)
             
             if total_score >= 70:
@@ -775,7 +781,7 @@ if solve_button and card_input:
                 st.write("🤔 Moderate hand. Defensive play may be wise against strong opponents.")
             else:
                 st.error(f"❌ **WEAK HAND** (Score: {total_score:.0f}/100)")
-                st.write("🛡️ Difficult hand. Focus on minimizing losses. Consider folding if game rules allow.")
+                st.write("🛡️ Difficult hand. Focus on minimizing losses.")
             
             st.markdown("---")
             
@@ -799,49 +805,46 @@ if solve_button and card_input:
                     st.write(f"- Bonus: +{result.bonus} points")
                     st.write(f"- Expected Value: {result.ev:+.2f}")
             
-            
-            
             # ===== RECOMMENDATIONS =====
             st.markdown("## 💡 Strategic Recommendations")
             
             recommendations = []
             
             if result.p_scoop > 0.3:
-                recommendations.append("🎯 **High scoop chance!** (30%+) Play aggressively and bet confidently.")
+                recommendations.append("🎯 **High scoop chance!** (30%+) Play aggressively.")
             
             if result.ev > 1.5:
-                recommendations.append("💰 **Very positive EV!** (>1.5) This is a highly profitable hand.")
+                recommendations.append("💰 **Very positive EV!** (>1.5) Highly profitable hand.")
             elif result.ev > 0.5:
-                recommendations.append("💵 **Positive EV** (>0.5) This hand has profit potential.")
+                recommendations.append("💵 **Positive EV** (>0.5) Good profit potential.")
             
             if result.bonus >= 6:
-                recommendations.append(f"⭐ **Big bonus hand!** You have {result.bonus} bonus points - maximize value!")
+                recommendations.append(f"⭐ **Big bonus!** {result.bonus} bonus points - maximize value!")
             elif result.bonus >= 3:
-                recommendations.append(f"✨ **Bonus hand!** You have {result.bonus} bonus points.")
+                recommendations.append(f"✨ **Bonus hand!** {result.bonus} bonus points.")
             
             if result.p_win_front > 0.8:
-                recommendations.append("💪 **Dominant front!** (80%+ win rate) You have a major advantage in chi cuối.")
+                recommendations.append("💪 **Dominant front!** (80%+ win rate) Major advantage.")
             
             if result.p_win_2_of_3 > 0.7:
-                recommendations.append("✅ **High overall win probability!** (70%+) Confident play strongly recommended.")
+                recommendations.append("✅ **High win probability!** (70%+) Play confidently.")
             
             if result.ev < -0.5:
-                recommendations.append("⚠️ **Negative EV hand** - Play defensively and minimize exposure.")
+                recommendations.append("⚠️ **Negative EV** - Play defensively.")
             
             if recommendations:
                 for rec in recommendations:
                     st.success(rec)
             else:
-                st.info("🤔 **Standard hand.** Play according to basic strategy. No special adjustments needed.")
+                st.info("🤔 **Standard hand.** Play according to basic strategy.")
             
-            # Show ML-specific info when ML-only mode was used
+            # ML-specific info
             if result.mode.value == "ml_only":
                 st.markdown("---")
                 st.info("""
                 🤖 **AI Deep Learning Mode Active**
                 
-                This solution was generated using our Deep Q-Network (DQN) trained on 100,000+ expert hands.
-                The AI model learned optimal strategies through reinforcement learning and expert gameplay patterns.
+                Solution from Deep Q-Network (DQN) trained on 100,000+ expert hands.
                 
                 **Model Details:**
                 - Architecture: Deep Q-Network with experience replay
@@ -851,90 +854,62 @@ if solve_button and card_input:
             
             st.markdown("---")
             
-            # ===== EXPORT & SHARE =====
-            st.markdown("### 📤 Export & Share Results")
+            # ===== EXPORT & ACTIONS =====
+            st.markdown("### 📤 Actions")
             
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                # Screenshot-friendly format
+                # Export
                 export_text = f"""
 🃏 Mau Binh AI Solver Pro - Result
 {'='*60}
 
-INPUT:
-Cards: {card_input}
+INPUT: {card_input}
 
-OPTIMAL ARRANGEMENT:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ARRANGEMENT:
+🔵 Back:   {Deck.cards_to_string(result.back)} → {back_eval}
+🟢 Middle: {Deck.cards_to_string(result.middle)} → {middle_eval}
+🟡 Front:  {Deck.cards_to_string(result.front)} → {front_eval}
 
-🔵 Chi 1 (Back - 5 cards):
-   {Deck.cards_to_string(result.back)}
-   {back_eval}
+METRICS:
+- EV: {result.ev:+.2f}
+- Bonus: +{result.bonus}
+- Scoop: {result.p_scoop*100:.1f}%
+- Win 2/3: {result.p_win_2_of_3*100:.1f}%
 
-🟢 Chi 2 (Middle - 5 cards):
-   {Deck.cards_to_string(result.middle)}
-   {middle_eval}
-
-🟡 Chi cuối (Front - 3 cards):
-   {Deck.cards_to_string(result.front)}
-   {front_eval}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-PERFORMANCE METRICS:
-├─ Expected Value (EV):    {result.ev:+.2f}
-├─ Bonus Points:           +{result.bonus}
-├─ Scoop Chance:           {result.p_scoop*100:.1f}%
-├─ Win 2/3 Chi:            {result.p_win_2_of_3*100:.1f}%
-│
-├─ Front Win Rate:         {result.p_win_front*100:.1f}%
-├─ Middle Win Rate:        {result.p_win_middle*100:.1f}%
-└─ Back Win Rate:          {result.p_win_back*100:.1f}%
-
-COMPUTATION:
-├─ Mode:                   {selected_mode}
-├─ Time:                   {result.computation_time:.2f}s
-└─ Arrangements Evaluated: {result.num_arrangements_evaluated:,}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Generated by Mau Binh AI Solver Pro
-{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 """
                 
                 st.download_button(
-                    label="📥 Download as TXT",
+                    label="📥 Download Result",
                     data=export_text,
-                    file_name=f"maubinh_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                    file_name=f"maubinh_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
                     mime="text/plain",
                     use_container_width=True
                 )
             
             with col2:
-                # Copy to clipboard
-                if st.button("📋 Copy Result", use_container_width=True, key="copy_result"):
-                    st.code(export_text, language=None)
-                    st.success("✅ Result displayed above - Ctrl+A, Ctrl+C to copy!")
+                # Solve another
+                if st.button("🔄 Solve Another Hand", use_container_width=True, key="solve_another"):
+                    st.session_state.cards_from_image = False
+                    st.session_state.cards_ready_from_picker = False
+                    st.session_state.card_input = "AS AH KD KC QS QH JD 10C 9S 8H 7D 6C 5S"
+                    rerun()
             
             with col3:
-                # Share on social
-                share_text = f"I got EV {result.ev:+.2f} with {result.p_scoop*100:.0f}% scoop chance using Mau Binh AI Solver Pro! 🃏🔥"
-                
-                twitter_url = f"https://twitter.com/intent/tweet?text={share_text.replace(' ', '%20')}"
-                
-                st.markdown(
-                    f'<a href="{twitter_url}" target="_blank" style="text-decoration: none;"><button style="width:100%; padding:0.6rem; background:#1DA1F2; color:white; border:none; border-radius:0.5rem; cursor:pointer; font-weight:700; font-size:1rem;">🐦 Tweet Result</button></a>',
-                    unsafe_allow_html=True
-                )
+                # Compare modes (if page exists)
+                if st.button("🔄 Compare Modes", use_container_width=True, key="compare_modes_btn"):
+                    st.info("💡 Use the 'Compare Modes' page in sidebar to compare different solver modes!")
             
-            # After successful solve, increment usage
+            # Increment usage
             st.session_state.daily_usage['count'] += 1
     
     except Exception as e:
         error = str(e)
         st.error(f"❌ **Error:** {error}")
         
-        with st.expander("🔍 Error Details (for debugging)"):
+        with st.expander("🔍 Error Details"):
             import traceback
             st.code(traceback.format_exc())
         
@@ -971,6 +946,7 @@ with col3:
     - Deep Q-Learning (DQN)
     - Game Theory Optimal
     - Monte Carlo Simulation
+    - AI Card Detection (Gemini)
     - Streamlit Framework
     """)
 
@@ -982,7 +958,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Debug info (only in development)
+# Debug info
 if os.getenv('DEBUG', 'false').lower() == 'true':
     with st.expander("🔧 Debug Info"):
         st.write("**Session State:**")
@@ -990,11 +966,13 @@ if os.getenv('DEBUG', 'false').lower() == 'true':
             'solve_count': st.session_state.solve_count,
             'daily_usage': str(st.session_state.daily_usage),
             'history_length': len(st.session_state.history),
-            'cards_ready_from_picker': st.session_state.get('cards_ready_from_picker', False)
+            'cards_ready_from_picker': st.session_state.get('cards_ready_from_picker', False),
+            'cards_from_image': st.session_state.get('cards_from_image', False)
         })
         
         st.write("**Environment:**")
+        st.write(f"- Image Input: {IMAGE_INPUT_AVAILABLE}")
+        st.write(f"- Picker: {PICKER_AVAILABLE}")
         st.write(f"- Visual Cards: {VISUAL_CARDS_AVAILABLE}")
-        st.write(f"- Picker Available: {PICKER_AVAILABLE}")
         st.write(f"- Python: {sys.version}")
         st.write(f"- Streamlit: {st.__version__}")

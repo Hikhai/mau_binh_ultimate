@@ -1,0 +1,57 @@
+# API Keys Configuration Template
+# 1. Copy file này thành api_keys.yaml
+# 2. Thay YOUR_KEY_HERE bằng API key thật
+# 3. KHÔNG commit api_keys.yaml lên git!
+
+gemini:
+  enabled: true
+  keys:
+    - key: "YOUR_GEMINI_KEY_HERE"  # Thay bằng key thật
+      name: "Main Account"
+      daily_limit: 1500
+    # Có thể thêm nhiều key:
+    # - key: "YOUR_GEMINI_KEY_2"
+    #   name: "Backup Account"
+    #   daily_limit: 1500
+  
+  preferred_models:
+    - "models/gemini-2.0-flash-exp"
+    - "models/gemini-1.5-flash"
+
+openai:
+  enabled: false  # Đổi true nếu có key
+  keys:
+    # - key: "YOUR_OPENAI_KEY_HERE"
+    #   name: "OpenAI Main"
+    #   daily_limit: 10000
+  
+  preferred_models:
+    - "gpt-4o-mini"
+    - "gpt-4o"
+
+claude:
+  enabled: false  # Đổi true nếu có key
+  keys:
+    # - key: "YOUR_CLAUDE_KEY_HERE"
+    #   name: "Claude Main"
+    #   daily_limit: 1000
+  
+  preferred_models:
+    - "claude-3-5-sonnet-20241022"
+
+yolo:
+  enabled: true  # Không cần key
+  model_path: "models/card_detector/best.pt"
+  confidence_threshold: 0.7
+
+provider_priority:
+  - yolo      # 1. Offline (FREE)
+  - gemini    # 2. Gemini (FREE)
+  - openai    # 3. OpenAI (Paid)
+  - claude    # 4. Claude (Paid)
+
+settings:
+  cache_enabled: true
+  cache_dir: "data/cache/card_detection"
+  max_consecutive_failures: 3
+  rate_limit_cooldown: 60

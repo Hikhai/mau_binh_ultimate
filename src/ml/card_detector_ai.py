@@ -1,449 +1,399 @@
 """
-AI-Powered Card Detection
-Sử dụng AI Vision APIs để nhận diện bài chính xác
-Supports: Google Gemini (FREE), OpenAI GPT-4 Vision, Google Cloud Vision
+Card Detector AI - Final Version
+Gemini API + Cache + Multi-key rotation (unlimited keys)
 """
 
-import base64
-import json
-import re
 import os
-from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Any
-from dataclasses import dataclass
-from enum import Enum
-import logging
-from PIL import Image
+import re
 import io
+import time
+import logging
+import yaml
+import hashlib
+import json
+from pathlib import Path
+from typing import List, Optional
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from PIL import Image
+
+# Tắt warning
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class AIProvider(Enum):
-    GEMINI = "gemini"           # Google Gemini - FREE!
-    OPENAI = "openai"           # OpenAI GPT-4 Vision
-    CLAUDE = "claude"           # Anthropic Claude
-    GOOGLE_VISION = "google_vision"  # Google Cloud Vision
-
-
 @dataclass
-class CardDetectionResult:
-    """Result from AI card detection"""
-    cards: List[str]           # List of card strings like ["AS", "KH", "QD"]
-    raw_response: str          # Raw AI response
-    confidence: float          # Overall confidence
-    provider: AIProvider       # Which AI was used
-    processing_time: float     # Time taken
+class DetectionResult:
+    """Kết quả nhận diện"""
+    cards: List[str]
     success: bool
+    provider: str
+    time: float
+    model_used: str = ""
     error: Optional[str] = None
+    from_cache: bool = False
+    key_used: int = 0  # Key nào đã dùng
     
     @property
     def card_string(self) -> str:
-        """Return space-separated card string"""
         return ' '.join(self.cards)
     
     @property
-    def is_valid_hand(self) -> bool:
-        """Check if we have exactly 13 unique cards"""
+    def is_valid(self) -> bool:
         return len(self.cards) == 13 and len(set(self.cards)) == 13
 
 
-class AICardDetector:
+class CardDetector:
     """
-    Main AI Card Detector class
-    Supports multiple AI providers
+    Card Detector - Gemini with unlimited keys support
     """
     
-    # Prompt template for card detection
-    DETECTION_PROMPT = """Analyze this image of playing cards and identify ALL cards visible.
+    PROMPT = """Identify exactly 13 playing cards in this image.
+Output ONLY the cards in format: RANK+SUIT separated by spaces.
+Ranks: A K Q J 10 9 8 7 6 5 4 3 2
+Suits: S(spades) H(hearts) D(diamonds) C(clubs)
+Example output: AS KH QD JC 10S 9H 8D 7C 6S 5H 4D 3C 2S
+Your output (13 cards only):"""
 
-IMPORTANT RULES:
-1. List EXACTLY the cards you can see clearly
-2. Format each card as: RankSuit (e.g., AS = Ace of Spades, 10H = Ten of Hearts)
-3. Ranks: 2, 3, 4, 5, 6, 7, 8, 9, 10, J, Q, K, A
-4. Suits: S = Spades (♠), H = Hearts (♥), D = Diamonds (♦), C = Clubs (♣)
-5. Separate cards with spaces
-6. Only output the card list, nothing else
-
-Example output format:
-AS KH QD JC 10S 9H 8D 7C 6S 5H 4D 3C 2S
-
-Now analyze the image and list all visible cards:"""
-
-    def __init__(self, provider: AIProvider = AIProvider.GEMINI, api_key: str = None):
-        self.provider = provider
-        self.api_key = api_key or self._get_api_key_from_env()
+    def __init__(self, config_path: str = "config/ai_config.yaml"):
+        self.config = self._load_config(config_path)
         
-        # Validate API key
-        if not self.api_key and provider != AIProvider.GOOGLE_VISION:
-            logger.warning(f"No API key provided for {provider.value}. Set environment variable or pass api_key.")
+        # Multi-key support (unlimited)
+        self.gemini_keys = self._load_all_keys()
+        self.current_key_index = 0
+        self.gemini_key = self.gemini_keys[0] if self.gemini_keys else None
+        
+        # Cache setup
+        self.cache_enabled = self.config.get('cache', {}).get('enabled', True)
+        self.cache_dir = Path(self.config.get('cache', {}).get('dir', 'data/cache/detections'))
+        
+        if self.cache_enabled:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Log status
+        if self.gemini_keys:
+            logger.info(f"✅ Loaded {len(self.gemini_keys)} Gemini API key(s)")
+        else:
+            logger.warning("⚠️  No Gemini API keys found!")
+        
+        if self.cache_enabled:
+            logger.info(f"✅ Cache enabled: {self.cache_dir}")
     
-    def _get_api_key_from_env(self) -> Optional[str]:
-        """Get API key from environment variables"""
-        env_vars = {
-            AIProvider.GEMINI: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
-            AIProvider.OPENAI: ["OPENAI_API_KEY"],
-            AIProvider.CLAUDE: ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"],
-            AIProvider.GOOGLE_VISION: ["GOOGLE_APPLICATION_CREDENTIALS"],
-        }
-        
-        for var in env_vars.get(self.provider, []):
-            key = os.environ.get(var)
-            if key:
-                return key
-        
-        return None
+    def _load_config(self, path: str) -> dict:
+        """Load config từ YAML"""
+        try:
+            config_file = Path(path)
+            if config_file.exists():
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    return yaml.safe_load(f) or {}
+        except Exception as e:
+            logger.warning(f"Config load error: {e}")
+        return {}
     
-    def detect_from_image(self, image: Image.Image) -> CardDetectionResult:
-        """Detect cards from PIL Image"""
-        import time
-        start_time = time.time()
+    def _load_all_keys(self) -> List[str]:
+        """Load tất cả API keys từ config và environment"""
+        keys = []
+        
+        # ✅ Từ list api_keys trong config (cách mới)
+        api_keys_list = self.config.get('gemini', {}).get('api_keys', [])
+        if isinstance(api_keys_list, list):
+            for key in api_keys_list:
+                if self._is_valid_key(key) and key not in keys:
+                    keys.append(key)
+        
+        # ✅ Từ api_key đơn lẻ (backward compatible)
+        main_key = self.config.get('gemini', {}).get('api_key', '')
+        if self._is_valid_key(main_key) and main_key not in keys:
+            keys.append(main_key)
+        
+        backup_key = self.config.get('gemini', {}).get('api_key_backup', '')
+        if self._is_valid_key(backup_key) and backup_key not in keys:
+            keys.append(backup_key)
+        
+        # ✅ Từ environment variables (hỗ trợ đến 10 keys)
+        env_vars = ['GEMINI_API_KEY', 'GOOGLE_API_KEY'] + \
+                   [f'GEMINI_API_KEY_{i}' for i in range(2, 11)]
+        
+        for env_var in env_vars:
+            env_key = os.environ.get(env_var, '')
+            if self._is_valid_key(env_key) and env_key not in keys:
+                keys.append(env_key)
+        
+        return keys
+    
+    def _is_valid_key(self, key: str) -> bool:
+        """Check nếu key hợp lệ"""
+        if not key or len(key) < 20:
+            return False
+        
+        invalid_prefixes = ['YOUR', 'PASTE', 'AIza...', 'REPLACE', 'xxx', 'XXX']
+        return not any(key.startswith(p) for p in invalid_prefixes)
+    
+    def detect(self, image: Image.Image) -> DetectionResult:
+        """
+        Nhận diện 13 lá bài
+        Flow: Check cache → Call Gemini (with rotation) → Save cache
+        """
+        start = time.time()
+        
+        # Check cache
+        if self.cache_enabled:
+            cached = self._load_from_cache(image)
+            if cached:
+                logger.info("💾 Cache HIT - không gọi API")
+                cached.time = time.time() - start
+                cached.from_cache = True
+                return cached
+        
+        # Call Gemini
+        logger.info("🌐 Cache MISS - calling Gemini API...")
+        result = self._detect_gemini(image)
+        result.time = time.time() - start
+        
+        # Save to cache
+        if self.cache_enabled and result.success:
+            self._save_to_cache(image, result)
+        
+        return result
+    
+    def _detect_gemini(self, image: Image.Image) -> DetectionResult:
+        """Nhận diện với auto-rotation qua tất cả keys"""
+        
+        if not self.gemini_keys:
+            return DetectionResult(
+                cards=[], success=False, provider="gemini", time=0,
+                error="Chưa có API key! Thêm vào config/ai_config.yaml"
+            )
+        
+        last_error = None
+        
+        # Thử TẤT CẢ keys
+        for attempt in range(len(self.gemini_keys)):
+            try:
+                api_key = self.gemini_keys[self.current_key_index]
+                key_num = self.current_key_index + 1
+                
+                import google.generativeai as genai
+                genai.configure(api_key=api_key)
+                
+                img = self._resize_image(image)
+                model_name = self._find_best_model(genai)
+                
+                logger.info(f"🔄 Key {key_num}/{len(self.gemini_keys)} → {model_name}")
+                
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content([self.PROMPT, img])
+                
+                cards = self._parse_response(response.text)
+                
+                logger.info(f"✅ Detected {len(cards)} cards")
+                
+                return DetectionResult(
+                    cards=cards,
+                    success=True,
+                    provider="gemini",
+                    time=0,
+                    model_used=model_name,
+                    key_used=key_num,
+                    error=None if len(cards) == 13 else f"Phát hiện {len(cards)}/13 lá"
+                )
+                
+            except Exception as e:
+                error_msg = str(e)
+                last_error = error_msg
+                
+                is_rate_limit = any(kw in error_msg.lower() for kw in 
+                                   ['429', 'quota', 'rate limit', 'resource exhausted'])
+                
+                if is_rate_limit and attempt < len(self.gemini_keys) - 1:
+                    logger.warning(f"⚠️  Key {key_num} rate limited → switching...")
+                    self.current_key_index = (self.current_key_index + 1) % len(self.gemini_keys)
+                    time.sleep(0.5)
+                    continue
+                else:
+                    if is_rate_limit:
+                        logger.error(f"❌ All {len(self.gemini_keys)} keys rate limited!")
+                        return DetectionResult(
+                            cards=[], success=False, provider="gemini", time=0,
+                            error=f"Tất cả {len(self.gemini_keys)} API key đều bị rate limit!"
+                        )
+                    else:
+                        logger.error(f"❌ Gemini error: {error_msg}")
+                        return DetectionResult(
+                            cards=[], success=False, provider="gemini", time=0,
+                            error=error_msg
+                        )
+        
+        return DetectionResult(
+            cards=[], success=False, provider="gemini", time=0,
+            error=f"All keys failed: {last_error}"
+        )
+    
+    def _find_best_model(self, genai) -> str:
+        """Tìm model tốt nhất"""
+        preferred = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
         
         try:
-            # Convert image to base64
-            base64_image = self._image_to_base64(image)
+            available = [m.name.replace("models/", "") 
+                        for m in genai.list_models() 
+                        if 'generateContent' in m.supported_generation_methods]
             
-            # Call appropriate API
-            if self.provider == AIProvider.GEMINI:
-                result = self._detect_with_gemini(base64_image)
-            elif self.provider == AIProvider.OPENAI:
-                result = self._detect_with_openai(base64_image)
-            elif self.provider == AIProvider.CLAUDE:
-                result = self._detect_with_claude(base64_image)
-            else:
-                raise ValueError(f"Unsupported provider: {self.provider}")
+            for p in preferred:
+                if p in available:
+                    return p
             
-            processing_time = time.time() - start_time
-            
-            # Parse the response
-            cards = self._parse_card_response(result)
-            
-            return CardDetectionResult(
-                cards=cards,
-                raw_response=result,
-                confidence=0.95 if len(cards) == 13 else 0.7,
-                provider=self.provider,
-                processing_time=processing_time,
-                success=True
-            )
-            
-        except Exception as e:
-            logger.error(f"Detection failed: {e}")
-            return CardDetectionResult(
-                cards=[],
-                raw_response="",
-                confidence=0.0,
-                provider=self.provider,
-                processing_time=time.time() - start_time,
-                success=False,
-                error=str(e)
-            )
+            return available[0] if available else "gemini-1.5-flash"
+        except:
+            return "gemini-1.5-flash"
     
-    def detect_from_file(self, file_path: str) -> CardDetectionResult:
-        """Detect cards from file path"""
-        image = Image.open(file_path)
-        return self.detect_from_image(image)
-    
-    def detect_from_bytes(self, image_bytes: bytes) -> CardDetectionResult:
-        """Detect cards from bytes"""
-        image = Image.open(io.BytesIO(image_bytes))
-        return self.detect_from_image(image)
-    
-    def _image_to_base64(self, image: Image.Image) -> str:
-        """Convert PIL Image to base64 string"""
-        # Resize if too large (API limits)
-        max_size = 1024
+    def _resize_image(self, image: Image.Image, max_size: int = 1024) -> Image.Image:
+        """Resize ảnh"""
         if max(image.size) > max_size:
             ratio = max_size / max(image.size)
             new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
             image = image.resize(new_size, Image.Resampling.LANCZOS)
         
-        # Convert to RGB if necessary
         if image.mode != 'RGB':
             image = image.convert('RGB')
         
-        # Encode to base64
-        buffer = io.BytesIO()
-        image.save(buffer, format='JPEG', quality=90)
-        return base64.b64encode(buffer.getvalue()).decode('utf-8')
+        return image
     
-    def _detect_with_gemini(self, base64_image: str) -> str:
-        """Detect cards using Google Gemini (FREE!)"""
-        try:
-            import google.generativeai as genai
-        except ImportError:
-            raise ImportError("Please install google-generativeai: pip install google-generativeai")
-        
-        if not self.api_key:
-            raise ValueError("Gemini API key required. Set GEMINI_API_KEY environment variable.")
-        
-        genai.configure(api_key=self.api_key)
-        
-        # Use Gemini Pro Vision
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        # Decode base64 to bytes
-        image_bytes = base64.b64decode(base64_image)
-        
-        # Create image part
-        image_part = {
-            "mime_type": "image/jpeg",
-            "data": base64_image
-        }
-        
-        # Generate response
-        response = model.generate_content([
-            self.DETECTION_PROMPT,
-            image_part
-        ])
-        
-        return response.text
-    
-    def _detect_with_openai(self, base64_image: str) -> str:
-        """Detect cards using OpenAI GPT-4 Vision"""
-        try:
-            from openai import OpenAI
-        except ImportError:
-            raise ImportError("Please install openai: pip install openai")
-        
-        if not self.api_key:
-            raise ValueError("OpenAI API key required. Set OPENAI_API_KEY environment variable.")
-        
-        client = OpenAI(api_key=self.api_key)
-        
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": self.DETECTION_PROMPT},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            }
-                        }
-                    ]
-                }
-            ],
-            max_tokens=300
-        )
-        
-        return response.choices[0].message.content
-    
-    def _detect_with_claude(self, base64_image: str) -> str:
-        """Detect cards using Anthropic Claude"""
-        try:
-            import anthropic
-        except ImportError:
-            raise ImportError("Please install anthropic: pip install anthropic")
-        
-        if not self.api_key:
-            raise ValueError("Anthropic API key required. Set ANTHROPIC_API_KEY environment variable.")
-        
-        client = anthropic.Anthropic(api_key=self.api_key)
-        
-        response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=300,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/jpeg",
-                                "data": base64_image
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": self.DETECTION_PROMPT
-                        }
-                    ]
-                }
-            ]
-        )
-        
-        return response.content[0].text
-    
-    def _parse_card_response(self, response: str) -> List[str]:
-        """Parse AI response to extract card list"""
-        # Clean up response
-        response = response.strip().upper()
-        
-        # Remove common prefixes/suffixes
-        response = re.sub(r'^(THE CARDS ARE|CARDS:|HERE ARE THE CARDS|I CAN SEE)[:\s]*', '', response, flags=re.IGNORECASE)
-        response = re.sub(r'\.$', '', response)
-        
-        # Extract cards using regex
-        # Match patterns like: AS, KH, 10D, 2C, etc.
-        card_pattern = r'\b(10|[2-9]|[JQKA])([SHDC])\b'
-        matches = re.findall(card_pattern, response)
+    def _parse_response(self, text: str) -> List[str]:
+        """Parse AI response"""
+        text = text.strip().upper()
+        pattern = r'\b(10|[2-9]|[JQKA])([SHDC])\b'
+        matches = re.findall(pattern, text)
         
         cards = []
         for rank, suit in matches:
             card = f"{rank}{suit}"
-            if card not in cards:  # Avoid duplicates
+            if card not in cards:
                 cards.append(card)
-        
-        # If regex didn't work well, try splitting
-        if len(cards) < 5:
-            # Try space-separated
-            tokens = response.split()
-            for token in tokens:
-                token = token.strip('.,;:()[]')
-                if self._is_valid_card(token) and token not in cards:
-                    cards.append(token)
         
         return cards
     
-    def _is_valid_card(self, card: str) -> bool:
-        """Check if string is a valid card"""
-        if len(card) < 2 or len(card) > 3:
-            return False
-        
-        valid_ranks = {'2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'}
-        valid_suits = {'S', 'H', 'D', 'C'}
-        
-        card = card.upper()
-        
-        if len(card) == 2:
-            rank, suit = card[0], card[1]
-        else:  # len == 3, must be 10X
-            rank, suit = card[:2], card[2]
-        
-        return rank in valid_ranks and suit in valid_suits
+    # ============ CACHE ============
+    
+    def _get_image_hash(self, image: Image.Image) -> str:
+        buffer = io.BytesIO()
+        image.save(buffer, format='JPEG', quality=95)
+        return hashlib.sha256(buffer.getvalue()).hexdigest()
+    
+    def _load_from_cache(self, image: Image.Image) -> Optional[DetectionResult]:
+        try:
+            img_hash = self._get_image_hash(image)
+            cache_file = self.cache_dir / f"{img_hash}.json"
+            
+            if not cache_file.exists():
+                return None
+            
+            max_age = self.config.get('cache', {}).get('max_age_hours', 168)
+            file_time = datetime.fromtimestamp(cache_file.stat().st_mtime)
+            
+            if datetime.now() - file_time > timedelta(hours=max_age):
+                cache_file.unlink()
+                return None
+            
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            return DetectionResult(
+                cards=data['cards'],
+                success=data['success'],
+                provider=data['provider'],
+                time=0,
+                model_used=data.get('model_used', ''),
+                error=data.get('error'),
+                from_cache=True
+            )
+        except:
+            return None
+    
+    def _save_to_cache(self, image: Image.Image, result: DetectionResult):
+        try:
+            img_hash = self._get_image_hash(image)
+            cache_file = self.cache_dir / f"{img_hash}.json"
+            
+            data = {
+                'cards': result.cards,
+                'success': result.success,
+                'provider': result.provider,
+                'model_used': result.model_used,
+                'error': result.error,
+                'cached_at': datetime.now().isoformat()
+            }
+            
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+            
+            logger.info(f"💾 Cached: {img_hash[:8]}...")
+        except Exception as e:
+            logger.debug(f"Cache save error: {e}")
+    
+    def clear_cache(self) -> int:
+        """Xóa cache"""
+        count = 0
+        for f in self.cache_dir.glob("*.json"):
+            f.unlink()
+            count += 1
+        logger.info(f"🗑️ Cleared {count} cache files")
+        return count
+    
+    # ============ UTILITY ============
+    
+    def detect_from_file(self, path: str) -> DetectionResult:
+        return self.detect(Image.open(path))
+    
+    def get_status(self) -> dict:
+        cache_files = list(self.cache_dir.glob("*.json")) if self.cache_enabled else []
+        return {
+            'total_keys': len(self.gemini_keys),
+            'current_key': self.current_key_index + 1,
+            'cache_enabled': self.cache_enabled,
+            'cache_files': len(cache_files)
+        }
+    
+    def add_key(self, api_key: str) -> bool:
+        """Thêm key mới runtime"""
+        if self._is_valid_key(api_key) and api_key not in self.gemini_keys:
+            self.gemini_keys.append(api_key)
+            logger.info(f"✅ Added new key. Total: {len(self.gemini_keys)}")
+            return True
+        return False
 
 
-class MultiProviderDetector:
-    """
-    Try multiple AI providers for best results
-    """
-    
-    def __init__(self):
-        self.providers = []
-        
-        # Try to initialize available providers
-        if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
-            self.providers.append(AICardDetector(AIProvider.GEMINI))
-        
-        if os.environ.get("OPENAI_API_KEY"):
-            self.providers.append(AICardDetector(AIProvider.OPENAI))
-        
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            self.providers.append(AICardDetector(AIProvider.CLAUDE))
-    
-    def detect(self, image: Image.Image) -> CardDetectionResult:
-        """Try detection with available providers"""
-        for detector in self.providers:
-            try:
-                result = detector.detect_from_image(image)
-                if result.success and result.is_valid_hand:
-                    return result
-            except Exception as e:
-                logger.warning(f"Provider {detector.provider.value} failed: {e}")
-                continue
-        
-        # If no provider succeeded, return error
-        return CardDetectionResult(
-            cards=[],
-            raw_response="",
-            confidence=0.0,
-            provider=AIProvider.GEMINI,
-            processing_time=0,
-            success=False,
-            error="All AI providers failed. Please check API keys."
-        )
-
-
-# ============ STREAMLIT INTEGRATION ============
-
-def create_ai_detector_ui():
-    """Create Streamlit UI for AI detector configuration"""
-    import streamlit as st
-    
-    st.markdown("### 🤖 AI Provider Settings")
-    
-    provider = st.selectbox(
-        "Select AI Provider",
-        options=["Google Gemini (Free)", "OpenAI GPT-4", "Claude"],
-        index=0
-    )
-    
-    provider_map = {
-        "Google Gemini (Free)": AIProvider.GEMINI,
-        "OpenAI GPT-4": AIProvider.OPENAI,
-        "Claude": AIProvider.CLAUDE
-    }
-    
-    selected_provider = provider_map[provider]
-    
-    # API Key input
-    env_var_map = {
-        AIProvider.GEMINI: "GEMINI_API_KEY",
-        AIProvider.OPENAI: "OPENAI_API_KEY",
-        AIProvider.CLAUDE: "ANTHROPIC_API_KEY"
-    }
-    
-    env_var = env_var_map[selected_provider]
-    existing_key = os.environ.get(env_var, "")
-    
-    if existing_key:
-        st.success(f"✅ {env_var} found in environment")
-        api_key = existing_key
-    else:
-        api_key = st.text_input(
-            f"Enter {env_var}",
-            type="password",
-            help=f"Get your API key from the provider's website"
-        )
-        
-        if api_key:
-            os.environ[env_var] = api_key
-    
-    return selected_provider, api_key
-
-
-# ============ TESTING ============
+# ============ TEST ============
 
 if __name__ == "__main__":
     import sys
     
-    print("Testing AI Card Detector...")
+    print("🃏 Card Detector - Multi-Key Version")
+    print("=" * 50)
     
-    # Check for API key
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    d = CardDetector()
     
-    if not api_key:
-        print("❌ No GEMINI_API_KEY found. Set it with:")
-        print("   export GEMINI_API_KEY='your-api-key'")
-        print("   Or on Windows:")
-        print("   set GEMINI_API_KEY=your-api-key")
-        sys.exit(1)
+    status = d.get_status()
+    print(f"\n📊 Status:")
+    print(f"  Total keys: {status['total_keys']}")
+    print(f"  Cache: {'ON' if status['cache_enabled'] else 'OFF'} ({status['cache_files']} files)")
     
-    print(f"✅ API key found")
-    
-    # Create test image (you would use a real image)
-    detector = AICardDetector(AIProvider.GEMINI, api_key)
-    
-    # Test with a sample image path
     if len(sys.argv) > 1:
-        image_path = sys.argv[1]
-        print(f"Testing with: {image_path}")
+        print(f"\n📸 Testing: {sys.argv[1]}")
         
-        result = detector.detect_from_file(image_path)
+        r = d.detect_from_file(sys.argv[1])
         
-        print(f"\nResults:")
-        print(f"  Success: {result.success}")
-        print(f"  Cards: {result.card_string}")
-        print(f"  Count: {len(result.cards)}")
-        print(f"  Valid hand: {result.is_valid_hand}")
-        print(f"  Time: {result.processing_time:.2f}s")
-        print(f"  Raw response: {result.raw_response}")
+        print(f"\n{'='*30}")
+        print(f"Provider: {r.provider} ({r.model_used})")
+        print(f"Key used: {r.key_used}/{status['total_keys']}")
+        print(f"From cache: {r.from_cache}")
+        print(f"Time: {r.time:.2f}s")
+        print(f"Cards ({len(r.cards)}): {r.card_string}")
+        print(f"Valid: {'✅' if r.is_valid else '❌'}")
+        
+        if r.error:
+            print(f"Error: {r.error}")
     else:
-        print("Usage: python card_detector_ai.py <image_path>")
+        print(f"\n💡 Usage: python card_detector_ai.py <image.jpg>")
