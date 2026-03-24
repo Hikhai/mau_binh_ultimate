@@ -1,149 +1,331 @@
 """
-Mode Comparison Component - SIMPLIFIED
+Mode Comparison Component - Reusable component for comparing solver modes
+Can be embedded in main app or used standalone
 """
 import streamlit as st
 import time
+import pandas as pd
+from typing import List, Dict, Any, Optional
+from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-def run_comparison(cards, solver_class, mode_enum, evaluator, deck_class):
-    """Run comparison and return results"""
+@dataclass
+class ModeResult:
+    """Result from a single mode"""
+    mode_name: str
+    mode_value: str
+    color: str
+    result: Any  # SolverResult
+    computation_time: float
+    success: bool
+    error: Optional[str] = None
+
+
+class ModeComparisonEngine:
+    """Engine for comparing multiple solver modes"""
     
-    modes = [
-        ('fast', '⚡ Fast'),
-        ('balanced', '⚖️ Balanced'),
-        ('accurate', '🎯 Accurate')
-    ]
+    MODES_CONFIG = {
+        "⚡ Fast": {
+            "value": "fast",
+            "color": "#38ef7d",
+            "desc": "Quick decisions",
+            "time_estimate": "< 1s"
+        },
+        "⚖️ Balanced": {
+            "value": "balanced",
+            "color": "#667eea",
+            "desc": "Best trade-off",
+            "time_estimate": "2-5s"
+        },
+        "🎯 Accurate": {
+            "value": "accurate",
+            "color": "#f39c12",
+            "desc": "High accuracy",
+            "time_estimate": "10-20s"
+        },
+        "🤖 ML Agent": {
+            "value": "ml_only",
+            "color": "#9b59b6",
+            "desc": "Deep Learning",
+            "time_estimate": "2-3s"
+        },
+        "🚀 Ultimate": {
+            "value": "ultimate",
+            "color": "#e74c3c",
+            "desc": "Best solution",
+            "time_estimate": "30-60s"
+        }
+    }
     
-    results = {}
+    def __init__(self, cards: List, parallel: bool = True):
+        self.cards = cards
+        self.parallel = parallel
+        self.results: List[ModeResult] = []
     
-    for mode_key, mode_name in modes:
-        st.write(f"🔄 Computing {mode_name}...")
+    def _solve_single(self, mode_name: str, config: Dict) -> ModeResult:
+        """Solve with a single mode"""
+        from ultimate_solver import UltimateSolver, SolverMode
         
         try:
-            mode = mode_enum(mode_key)
-            solver = solver_class(cards, mode=mode, verbose=False)
-            
             start = time.time()
+            solver = UltimateSolver(
+                self.cards.copy(),
+                mode=SolverMode(config["value"]),
+                verbose=False
+            )
             result = solver.solve()
             elapsed = time.time() - start
             
-            results[mode_key] = {
-                'name': mode_name,
-                'back': deck_class.cards_to_string(result.back),
-                'middle': deck_class.cards_to_string(result.middle),
-                'front': deck_class.cards_to_string(result.front),
-                'back_eval': str(evaluator.evaluate(result.back)),
-                'middle_eval': str(evaluator.evaluate(result.middle)),
-                'front_eval': str(evaluator.evaluate(result.front)),
-                'ev': result.ev,
-                'bonus': result.bonus,
-                'p_scoop': result.p_scoop,
-                'p_win_2_of_3': result.p_win_2_of_3,
-                'p_win_front': result.p_win_front,
-                'p_win_middle': result.p_win_middle,
-                'p_win_back': result.p_win_back,
-                'time': elapsed,
-                'success': True
-            }
-            st.write(f"✅ {mode_name} done! EV: {result.ev:+.2f}")
-            
+            return ModeResult(
+                mode_name=mode_name,
+                mode_value=config["value"],
+                color=config["color"],
+                result=result,
+                computation_time=elapsed,
+                success=True
+            )
         except Exception as e:
-            results[mode_key] = {
-                'name': mode_name,
-                'error': str(e),
-                'success': False
-            }
-            st.write(f"❌ {mode_name} failed: {e}")
+            return ModeResult(
+                mode_name=mode_name,
+                mode_value=config["value"],
+                color=config["color"],
+                result=None,
+                computation_time=0,
+                success=False,
+                error=str(e)
+            )
     
-    return results
+    def compare(self, modes: List[str] = None, progress_callback=None) -> List[ModeResult]:
+        """
+        Compare multiple modes
+        
+        Args:
+            modes: List of mode names to compare. If None, compare all.
+            progress_callback: Optional callback(completed, total, mode_name)
+        
+        Returns:
+            List of ModeResult
+        """
+        if modes is None:
+            modes = list(self.MODES_CONFIG.keys())
+        
+        self.results = []
+        total = len(modes)
+        
+        if self.parallel and total > 1:
+            with ThreadPoolExecutor(max_workers=min(total, 4)) as executor:
+                futures = {
+                    executor.submit(
+                        self._solve_single,
+                        mode_name,
+                        self.MODES_CONFIG[mode_name]
+                    ): mode_name
+                    for mode_name in modes
+                }
+                
+                completed = 0
+                for future in as_completed(futures):
+                    result = future.result()
+                    self.results.append(result)
+                    completed += 1
+                    
+                    if progress_callback:
+                        progress_callback(completed, total, result.mode_name)
+        else:
+            for i, mode_name in enumerate(modes):
+                result = self._solve_single(mode_name, self.MODES_CONFIG[mode_name])
+                self.results.append(result)
+                
+                if progress_callback:
+                    progress_callback(i + 1, total, mode_name)
+        
+        # Sort by mode order
+        mode_order = list(self.MODES_CONFIG.keys())
+        self.results.sort(
+            key=lambda x: mode_order.index(x.mode_name) if x.mode_name in mode_order else 999
+        )
+        
+        return self.results
+    
+    def to_dataframe(self) -> pd.DataFrame:
+        """Convert results to pandas DataFrame"""
+        data = []
+        
+        for r in self.results:
+            if r.success:
+                res = r.result
+                data.append({
+                    "Mode": r.mode_name,
+                    "EV": res.ev,
+                    "Bonus": res.bonus,
+                    "Scoop %": res.p_scoop * 100,
+                    "Win 2/3 %": res.p_win_2_of_3 * 100,
+                    "Front Win %": res.p_win_front * 100,
+                    "Middle Win %": res.p_win_middle * 100,
+                    "Back Win %": res.p_win_back * 100,
+                    "Time (s)": r.computation_time,
+                    "Arrangements": res.num_arrangements_evaluated,
+                    "Color": r.color
+                })
+            else:
+                data.append({
+                    "Mode": r.mode_name,
+                    "Error": r.error,
+                    "Color": r.color
+                })
+        
+        return pd.DataFrame(data)
+    
+    def get_best(self, metric: str = "ev") -> Optional[ModeResult]:
+        """Get best result by metric"""
+        successful = [r for r in self.results if r.success]
+        
+        if not successful:
+            return None
+        
+        if metric == "ev":
+            return max(successful, key=lambda r: r.result.ev)
+        elif metric == "scoop":
+            return max(successful, key=lambda r: r.result.p_scoop)
+        elif metric == "speed":
+            return min(successful, key=lambda r: r.computation_time)
+        elif metric == "win_2_3":
+            return max(successful, key=lambda r: r.result.p_win_2_of_3)
+        else:
+            return successful[0]
+    
+    def find_differences(self) -> List[Dict]:
+        """Find differences between mode arrangements"""
+        differences = []
+        successful = [r for r in self.results if r.success]
+        
+        for i, r1 in enumerate(successful):
+            for j, r2 in enumerate(successful):
+                if i >= j:
+                    continue
+                
+                same_front = set(str(c) for c in r1.result.front) == set(str(c) for c in r2.result.front)
+                same_middle = set(str(c) for c in r1.result.middle) == set(str(c) for c in r2.result.middle)
+                same_back = set(str(c) for c in r1.result.back) == set(str(c) for c in r2.result.back)
+                
+                if not (same_front and same_middle and same_back):
+                    differences.append({
+                        "mode1": r1.mode_name,
+                        "mode2": r2.mode_name,
+                        "ev_diff": r1.result.ev - r2.result.ev,
+                        "same_front": same_front,
+                        "same_middle": same_middle,
+                        "same_back": same_back
+                    })
+        
+        return differences
 
 
-def display_results(results):
-    """Display comparison results"""
+def render_comparison_summary(engine: ModeComparisonEngine):
+    """Render comparison summary in Streamlit"""
+    df = engine.to_dataframe()
     
-    st.markdown("### 📊 Comparison Results")
-    
-    # Check success
-    if not all(r.get('success', False) for r in results.values()):
-        st.error("Some modes failed!")
+    if df.empty:
+        st.warning("No results to display")
         return
     
-    # Summary table header
-    st.markdown("#### Quick Summary")
+    # Best results
+    best_ev = engine.get_best("ev")
+    best_scoop = engine.get_best("scoop")
+    fastest = engine.get_best("speed")
     
-    header_cols = st.columns([2, 1, 1, 1, 1, 1])
-    header_cols[0].markdown("**Mode**")
-    header_cols[1].markdown("**EV**")
-    header_cols[2].markdown("**Bonus**")
-    header_cols[3].markdown("**Scoop**")
-    header_cols[4].markdown("**Win 2/3**")
-    header_cols[5].markdown("**Time**")
-    
-    # Data rows
-    for mode_key in ['fast', 'balanced', 'accurate']:
-        r = results[mode_key]
-        cols = st.columns([2, 1, 1, 1, 1, 1])
-        cols[0].write(r['name'])
-        cols[1].write(f"{r['ev']:+.2f}")
-        cols[2].write(f"+{r['bonus']}")
-        cols[3].write(f"{r['p_scoop']*100:.1f}%")
-        cols[4].write(f"{r['p_win_2_of_3']*100:.1f}%")
-        cols[5].write(f"{r['time']:.2f}s")
-    
-    # Best mode
-    best = max(results.items(), key=lambda x: x[1].get('ev', -999))
-    st.success(f"🏆 **Best:** {best[1]['name']} with EV = {best[1]['ev']:+.2f}")
-    
-    # Detailed tabs
-    st.markdown("---")
-    st.markdown("#### Detailed View")
-    
-    tabs = st.tabs(["⚡ Fast", "⚖️ Balanced", "🎯 Accurate"])
-    
-    for idx, mode_key in enumerate(['fast', 'balanced', 'accurate']):
-        with tabs[idx]:
-            r = results[mode_key]
-            
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.markdown("**Back**")
-                st.code(r['back'])
-                st.caption(r['back_eval'])
-            with c2:
-                st.markdown("**Middle**")
-                st.code(r['middle'])
-                st.caption(r['middle_eval'])
-            with c3:
-                st.markdown("**Front**")
-                st.code(r['front'])
-                st.caption(r['front_eval'])
-
-
-def show_comparison_ui(cards, solver_class, mode_enum, evaluator, deck_class, card_input_str):
-    """Main comparison UI"""
-    
-    # Simple fixed key
-    key = "mode_comparison_results"
-    
-    st.markdown("""
-    **Compare Fast vs Balanced vs Accurate:**
-    """)
-    
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("🚀 Run Comparison", type="primary", use_container_width=True, key="compare_btn"):
-            # Run and save immediately
-            st.session_state[key] = run_comparison(
-                cards, solver_class, mode_enum, evaluator, deck_class
+        if best_ev:
+            st.metric(
+                "💰 Best EV",
+                f"{best_ev.result.ev:+.3f}",
+                delta=best_ev.mode_name
             )
     
     with col2:
-        if key in st.session_state:
-            if st.button("🗑️ Clear", use_container_width=True, key="clear_btn"):
-                del st.session_state[key]
+        if best_scoop:
+            st.metric(
+                "🎯 Best Scoop",
+                f"{best_scoop.result.p_scoop*100:.1f}%",
+                delta=best_scoop.mode_name
+            )
     
-    # Display if we have results
-    if key in st.session_state and st.session_state[key]:
-        st.markdown("---")
-        display_results(st.session_state[key])
+    with col3:
+        if fastest:
+            st.metric(
+                "⚡ Fastest",
+                f"{fastest.computation_time:.2f}s",
+                delta=fastest.mode_name
+            )
+    
+    # Table
+    display_cols = ["Mode", "EV", "Bonus", "Scoop %", "Win 2/3 %", "Time (s)"]
+    available_cols = [c for c in display_cols if c in df.columns]
+    
+    st.dataframe(
+        df[available_cols].style.format({
+            "EV": "{:+.3f}",
+            "Bonus": "{:.0f}",
+            "Scoop %": "{:.1f}%",
+            "Win 2/3 %": "{:.1f}%",
+            "Time (s)": "{:.3f}s"
+        }, na_rep="-"),
+        use_container_width=True
+    )
+    
+    # Differences
+    diffs = engine.find_differences()
+    if diffs:
+        st.warning(f"⚠️ {len(diffs)} mode pairs have different arrangements!")
+    else:
+        st.success("✅ All modes produced the same arrangement!")
+
+
+def quick_compare_widget(cards_input: str, modes: List[str] = None):
+    """
+    Quick comparison widget that can be embedded anywhere
+    
+    Usage:
+        from mode_comparison import quick_compare_widget
+        quick_compare_widget("AS AH KD KC QS QH JD 10C 9S 8H 7D 6C 5S")
+    """
+    from card import Deck
+    
+    try:
+        cards = Deck.parse_hand(cards_input)
+        
+        if len(cards) != 13:
+            st.error(f"Need 13 cards, got {len(cards)}")
+            return
+        
+        if modes is None:
+            modes = ["⚡ Fast", "⚖️ Balanced", "🎯 Accurate"]
+        
+        engine = ModeComparisonEngine(cards, parallel=True)
+        
+        with st.spinner("Comparing modes..."):
+            engine.compare(modes)
+        
+        render_comparison_summary(engine)
+        
+        return engine
+        
+    except Exception as e:
+        st.error(f"Error: {str(e)}")
+        return None
+
+
+# ===== USAGE EXAMPLE =====
+if __name__ == "__main__":
+    st.title("Mode Comparison Test")
+    
+    cards_input = st.text_input(
+        "Enter 13 cards",
+        value="AS AH KD KC QS QH JD 10C 9S 8H 7D 6C 5S"
+    )
+    
+    if st.button("Compare"):
+        quick_compare_widget(cards_input)

@@ -334,11 +334,39 @@ with st.sidebar:
 
 # ============== MAIN CONTENT ==============
 
+# Import image input component với error handling chi tiết
+IMAGE_INPUT_AVAILABLE = False
+image_input_component = None
+
+try:
+    import sys
+    import os
+    
+    # Đảm bảo path đúng
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    components_dir = os.path.join(current_dir, 'components')
+    
+    if components_dir not in sys.path:
+        sys.path.insert(0, components_dir)
+    if current_dir not in sys.path:
+        sys.path.insert(0, current_dir)
+    
+    from components.image_input import image_input_component
+    IMAGE_INPUT_AVAILABLE = True
+    
+except Exception as e:
+    print(f"⚠️ Image input component not available: {e}")
+    IMAGE_INPUT_AVAILABLE = False
+
 # Import card picker
+PICKER_AVAILABLE = False
+interactive_card_picker = None
+
 try:
     from card_picker import interactive_card_picker, quick_select_buttons
     PICKER_AVAILABLE = True
-except ImportError:
+except Exception as e:
+    print(f"⚠️ Card picker not available: {e}")
     PICKER_AVAILABLE = False
 
 # Example hands
@@ -356,22 +384,153 @@ with st.expander("📝 Example Hands (Click to use)", expanded=False):
         with col:
             if st.button(name, key=f"ex_{i}", use_container_width=True):
                 st.session_state.card_input = cards
-                st.session_state.cards_ready_from_picker = False  # Reset picker state
+                st.session_state.cards_ready_from_picker = False
+                st.session_state.cards_from_image = False
                 rerun()
 
 
 # ===== INPUT SECTION WITH TABS =====
 st.markdown("## 📥 Input Your Cards")
 
-# Initialize flag for picked cards state
+# Initialize flags
 if 'cards_ready_from_picker' not in st.session_state:
     st.session_state.cards_ready_from_picker = False
+
+if 'cards_from_image' not in st.session_state:
+    st.session_state.cards_from_image = False
 
 # Initialize solve button state
 solve_button = False
 card_input = st.session_state.get('card_input', "AS AH KD KC QS QH JD 10C 9S 8H 7D 6C 5S")
 
-if PICKER_AVAILABLE:
+# ===== CREATE TABS BASED ON AVAILABLE COMPONENTS =====
+if IMAGE_INPUT_AVAILABLE and PICKER_AVAILABLE:
+    # All 3 tabs
+    tab1, tab2, tab3 = st.tabs(["✍️ Type Cards", "🎴 Click to Pick", "📷 From Image"])
+    
+    # TAB 1: Type Cards
+    with tab1:
+        col1, col2 = st.columns([4, 1])
+        
+        with col1:
+            typed_input = st.text_input(
+                "Enter 13 cards (space-separated)",
+                value=st.session_state.get('card_input', "AS AH KD KC QS QH JD 10C 9S 8H 7D 6C 5S"),
+                help="Format: AS KH QD JC 10S 9H 8D 7C 6S 5H 4D 3C 2S",
+                key="main_input",
+                placeholder="e.g., AS KH QD JC 10S 9H 8D 7C 6S..."
+            )
+        
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🚀 SOLVE", type="primary", use_container_width=True, key="solve_type"):
+                card_input = typed_input
+                solve_button = True
+                st.session_state.cards_ready_from_picker = False
+                st.session_state.cards_from_image = False
+    
+    # TAB 2: Click to Pick
+    with tab2:
+        if st.session_state.cards_ready_from_picker and st.session_state.get('card_input'):
+            st.success(f"✅ **Cards selected!** Ready to solve.")
+            st.code(st.session_state.card_input, language=None)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("🚀 SOLVE NOW", type="primary", use_container_width=True, key="solve_pick"):
+                    card_input = st.session_state.card_input
+                    solve_button = True
+            
+            with col2:
+                if st.button("🔄 Pick Different Cards", use_container_width=True, key="pick_different"):
+                    st.session_state.cards_ready_from_picker = False
+                    st.session_state.picker_selected_cards = []
+                    rerun()
+        else:
+            picked_result = interactive_card_picker()
+            
+            if picked_result:
+                st.session_state.card_input = picked_result
+                st.session_state.cards_ready_from_picker = True
+                st.session_state.cards_from_image = False
+                rerun()
+    
+    # TAB 3: From Image (NEW!)
+    with tab3:
+        if st.session_state.get('cards_from_image') and st.session_state.get('card_input'):
+            st.success(f"✅ **Cards detected from image!**")
+            st.code(st.session_state.card_input, language=None)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("🚀 SOLVE NOW", type="primary", use_container_width=True, key="solve_image"):
+                    card_input = st.session_state.card_input
+                    solve_button = True
+            
+            with col2:
+                if st.button("📷 Detect Different Image", use_container_width=True, key="new_image"):
+                    st.session_state.cards_from_image = False
+                    rerun()
+        else:
+            detected_cards = image_input_component(key="main_image_input")
+            
+            if detected_cards:
+                st.session_state.card_input = detected_cards
+                st.session_state.cards_from_image = True
+                st.session_state.cards_ready_from_picker = False
+                rerun()
+
+elif IMAGE_INPUT_AVAILABLE and not PICKER_AVAILABLE:
+    # 2 tabs: Type + Image
+    tab1, tab3 = st.tabs(["✍️ Type Cards", "📷 From Image"])
+    
+    with tab1:
+        col1, col2 = st.columns([4, 1])
+        
+        with col1:
+            typed_input = st.text_input(
+                "Enter 13 cards (space-separated)",
+                value=st.session_state.get('card_input', "AS AH KD KC QS QH JD 10C 9S 8H 7D 6C 5S"),
+                help="Format: AS KH QD JC 10S 9H 8D 7C 6S 5H 4D 3C 2S",
+                key="main_input",
+                placeholder="e.g., AS KH QD JC 10S 9H 8D 7C 6S..."
+            )
+        
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🚀 SOLVE", type="primary", use_container_width=True, key="solve_type"):
+                card_input = typed_input
+                solve_button = True
+                st.session_state.cards_from_image = False
+    
+    with tab3:
+        if st.session_state.get('cards_from_image') and st.session_state.get('card_input'):
+            st.success(f"✅ **Cards detected from image!**")
+            st.code(st.session_state.card_input, language=None)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("🚀 SOLVE NOW", type="primary", use_container_width=True, key="solve_image"):
+                    card_input = st.session_state.card_input
+                    solve_button = True
+            
+            with col2:
+                if st.button("📷 Detect Different Image", use_container_width=True, key="new_image"):
+                    st.session_state.cards_from_image = False
+                    rerun()
+        else:
+            detected_cards = image_input_component(key="main_image_input")
+            
+            if detected_cards:
+                st.session_state.card_input = detected_cards
+                st.session_state.cards_from_image = True
+                rerun()
+
+elif PICKER_AVAILABLE and not IMAGE_INPUT_AVAILABLE:
+    # 2 tabs: Type + Pick
     tab1, tab2 = st.tabs(["✍️ Type Cards", "🎴 Click to Pick"])
     
     with tab1:
@@ -391,13 +550,10 @@ if PICKER_AVAILABLE:
             if st.button("🚀 SOLVE", type="primary", use_container_width=True, key="solve_type"):
                 card_input = typed_input
                 solve_button = True
-                # Reset picker flag when using type tab
                 st.session_state.cards_ready_from_picker = False
     
     with tab2:
-        # Check if cards are ready from previous pick
         if st.session_state.cards_ready_from_picker and st.session_state.get('card_input'):
-            # Show the selected cards
             st.success(f"✅ **Cards selected!** Ready to solve.")
             st.code(st.session_state.card_input, language=None)
             
@@ -413,12 +569,9 @@ if PICKER_AVAILABLE:
                     st.session_state.cards_ready_from_picker = False
                     st.session_state.picker_selected_cards = []
                     rerun()
-        
         else:
-            # Show card picker
             picked_result = interactive_card_picker()
             
-            # When user clicks "USE THESE CARDS"
             if picked_result:
                 st.session_state.card_input = picked_result
                 st.session_state.cards_ready_from_picker = True
@@ -645,6 +798,8 @@ if solve_button and card_input:
                     st.write(f"- Evaluated: {result.num_arrangements_evaluated:,} arrangements")
                     st.write(f"- Bonus: +{result.bonus} points")
                     st.write(f"- Expected Value: {result.ev:+.2f}")
+            
+            
             
             # ===== RECOMMENDATIONS =====
             st.markdown("## 💡 Strategic Recommendations")
