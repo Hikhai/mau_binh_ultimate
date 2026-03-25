@@ -16,8 +16,6 @@ data/cache/
 .idea/
 *.log
 "@ | Out-File -Encoding UTF8 .gitignore
-# API Keys - IMPORTANT!
-config/api_keys.yaml
 
 # Cache
 data/cache/
@@ -25,6 +23,3 @@ data/logs/
 
 # YOLO models (large files)
 models/card_detector/*.pt
-
-# State files
-data/cache/api_key_state.json
