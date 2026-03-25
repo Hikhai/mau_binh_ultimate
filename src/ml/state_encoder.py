@@ -1,5 +1,5 @@
 """
-State & Action Encoder cho ML
+State & Action Encoder cho ML - FIXED VERSION
 """
 import torch
 import numpy as np
@@ -19,19 +19,31 @@ class StateEncoder:
     @staticmethod
     def encode(cards: List[Card]) -> np.ndarray:
         """
-        Encode 13 cards thành one-hot vector 52 chiều
+        Encode 13 cards với NHIỀU THÔNG TIN HƠN
+        
+        Format mới (65-dim):
+        - 52-dim: one-hot của 13 lá
+        - 13-dim: rank histogram (count của mỗi rank từ 2-A)
         
         Args:
             cards: List of 13 Card objects
             
         Returns:
-            numpy array shape (52,) với 13 giá trị = 1, còn lại = 0
+            numpy array shape (65,)
         """
-        state = np.zeros(52, dtype=np.float32)
-        
+        # One-hot của 13 lá (52-dim)
+        one_hot = np.zeros(52, dtype=np.float32)
         for card in cards:
-            index = card.to_index()
-            state[index] = 1.0
+            one_hot[card.to_index()] = 1.0
+        
+        # Rank histogram (13-dim: count của mỗi rank từ 2-A)
+        rank_hist = np.zeros(13, dtype=np.float32)
+        for card in cards:
+            rank_idx = card.rank.value - 2  # 2→0, 3→1, ..., A→12
+            rank_hist[rank_idx] += 1.0
+        
+        # Combine
+        state = np.concatenate([one_hot, rank_hist])
         
         return state
     
@@ -41,7 +53,7 @@ class StateEncoder:
         Encode batch of hands
         
         Returns:
-            torch.Tensor shape (batch_size, 52)
+            torch.Tensor shape (batch_size, 65)
         """
         encoded = [StateEncoder.encode(cards) for cards in batch_cards]
         return torch.FloatTensor(np.array(encoded))
@@ -52,12 +64,13 @@ class StateEncoder:
         Decode state vector về cards
         
         Args:
-            state: numpy array shape (52,)
+            state: numpy array shape (65,)
             
         Returns:
             List of Card objects
         """
         cards = []
+        # Chỉ decode phần one-hot (52 chiều đầu)
         for i in range(52):
             if state[i] > 0.5:  # > 0.5 để handle floating point
                 card = Card.from_index(i)
@@ -68,26 +81,23 @@ class StateEncoder:
 
 class ActionEncoder:
     """
-    Encode/Decode actions (cách xếp bài)
+    Encode/Decode actions ĐÚNG CÁCH
     
-    Action space rất lớn: C(13,5) * C(8,5) = 72,072 cách
-    Để ML khả thi, ta dùng simplified action space
+    Action = index của back trong C(13,5) = 1287 combinations
     """
     
-    def __init__(self, use_simplified: bool = True):
+    def __init__(self):
         """
-        Args:
-            use_simplified: Nếu True, dùng simplified action space (~1000 actions)
-                           Nếu False, dùng full space (72k actions)
+        Pre-compute tất cả C(13,5) combinations
         """
-        self.use_simplified = use_simplified
+        # Pre-compute tất cả combinations của back (5 lá từ 13 lá)
+        self.all_back_combos = list(combinations(range(13), 5))
+        self.action_space_size = len(self.all_back_combos)  # 1287
         
-        if use_simplified:
-            # Simplified: Chỉ xét các cách xếp "reasonable"
-            self.action_space_size = 1000
-        else:
-            # Full: 72,072 cách
-            self.action_space_size = 72072
+        # Create reverse mapping cho encode nhanh
+        self.combo_to_idx = {combo: idx for idx, combo in enumerate(self.all_back_combos)}
+        
+        print(f"Action space size: {self.action_space_size}")
     
     def encode_action(
         self,
@@ -95,21 +105,28 @@ class ActionEncoder:
         all_cards: List[Card]
     ) -> int:
         """
-        Encode arrangement thành action index
+        Encode arrangement → action index
         
-        Simplified approach: Hash arrangement to fixed range
+        Action = index của back combination trong C(13,5)
+        
+        Args:
+            arrangement: (back, middle, front)
+            all_cards: 13 lá gốc
+            
+        Returns:
+            action_index: 0-1286
         """
         back, middle, front = arrangement
         
-        # Tạo tuple of indices
+        # Get indices của back cards trong all_cards
         back_indices = tuple(sorted(all_cards.index(c) for c in back))
-        middle_indices = tuple(sorted(all_cards.index(c) for c in middle))
         
-        # Hash to action index
-        action_hash = hash((back_indices, middle_indices))
-        action_index = abs(action_hash) % self.action_space_size
-        
-        return action_index
+        # Lookup trong pre-computed mapping
+        if back_indices in self.combo_to_idx:
+            return self.combo_to_idx[back_indices]
+        else:
+            # Fallback (không nên xảy ra)
+            return 0
     
     def decode_action(
         self,
@@ -117,24 +134,29 @@ class ActionEncoder:
         all_cards: List[Card]
     ) -> Tuple[List[Card], List[Card], List[Card]]:
         """
-        Decode action index về arrangement
+        Decode action index → arrangement
         
-        Note: Vì dùng hash, không thể decode chính xác
-        Thay vào đó, ta generate arrangement từ action_index như một seed
+        Args:
+            action_index: 0-1286
+            all_cards: 13 lá gốc
+            
+        Returns:
+            (back, middle, front)
         """
-        # Use action_index as seed for deterministic random
-        np.random.seed(action_index)
+        # Clamp action_index
+        if action_index >= self.action_space_size or action_index < 0:
+            action_index = 0
         
-        # Random shuffle và chia
-        shuffled = all_cards.copy()
-        np.random.shuffle(shuffled)
+        # Get back indices
+        back_indices = self.all_back_combos[action_index]
+        back = [all_cards[i] for i in back_indices]
         
-        back = shuffled[:5]
-        middle = shuffled[5:10]
-        front = shuffled[10:13]
+        # Remaining 8 cards
+        remaining_indices = [i for i in range(13) if i not in back_indices]
         
-        # Reset seed
-        np.random.seed(None)
+        # Middle = first 5, Front = last 3
+        middle = [all_cards[i] for i in remaining_indices[:5]]
+        front = [all_cards[i] for i in remaining_indices[5:]]
         
         return (back, middle, front)
     
@@ -147,7 +169,7 @@ class ActionEncoder:
         Tạo mask cho valid actions
         
         Returns:
-            Binary mask (action_space_size,) với 1 = valid, 0 = invalid
+            Binary mask (1287,) với 1 = valid, 0 = invalid
         """
         mask = np.zeros(self.action_space_size, dtype=np.float32)
         
@@ -171,10 +193,18 @@ def test_state_encoder():
     # Encode
     state = StateEncoder.encode(cards)
     
-    assert state.shape == (52,)
-    assert np.sum(state) == 13  # 13 lá = 13 giá trị 1
+    # *** FIX: State giờ là 65-dim ***
+    assert state.shape == (65,), f"Expected (65,), got {state.shape}"
+    
+    # First 52 elements = one-hot
+    assert np.sum(state[:52]) == 13  # 13 lá = 13 giá trị 1
+    
+    # Last 13 elements = rank histogram
+    assert np.sum(state[52:]) == 13  # Tổng count = 13 lá
+    
     print(f"  State shape: {state.shape} ✓")
-    print(f"  Sum of state: {np.sum(state)} ✓")
+    print(f"  One-hot sum: {np.sum(state[:52])} ✓")
+    print(f"  Rank hist sum: {np.sum(state[52:])} ✓")
     
     # Decode
     decoded_cards = StateEncoder.decode(state)
@@ -183,9 +213,9 @@ def test_state_encoder():
     print(f"  Decode successful ✓")
     
     # Test batch encoding
-    batch = [cards, cards[:10] + cards[:3]]  # 2 hands
+    batch = [cards, cards]  # 2 hands giống nhau
     batch_tensor = StateEncoder.encode_batch(batch)
-    assert batch_tensor.shape == (2, 52)
+    assert batch_tensor.shape == (2, 65), f"Expected (2, 65), got {batch_tensor.shape}"
     print(f"  Batch encoding shape: {batch_tensor.shape} ✓")
     
     print("✅ StateEncoder tests passed!")
@@ -195,7 +225,7 @@ def test_action_encoder():
     """Test ActionEncoder"""
     print("\nTesting ActionEncoder...")
     
-    encoder = ActionEncoder(use_simplified=True)
+    encoder = ActionEncoder()
     
     # Test hand
     hand_str = "A♠ K♥ Q♦ J♣ 10♠ 9♥ 8♦ 7♣ 6♠ 5♥ 4♦ 3♣ 2♠"
@@ -212,13 +242,19 @@ def test_action_encoder():
     assert 0 <= action_idx < encoder.action_space_size
     print(f"  Action index: {action_idx} ✓")
     
-    # Decode (sẽ khác arrangement gốc vì dùng hash)
+    # Decode
     decoded = encoder.decode_action(action_idx, cards)
     assert len(decoded) == 3
     assert len(decoded[0]) == 5
     assert len(decoded[1]) == 5
     assert len(decoded[2]) == 3
     print(f"  Decode successful ✓")
+    
+    # *** TEST CONSISTENCY ***
+    # Encode lại decoded arrangement → phải ra cùng action_idx
+    action_idx2 = encoder.encode_action(decoded, cards)
+    assert action_idx == action_idx2, f"Encode/decode not consistent! {action_idx} != {action_idx2}"
+    print(f"  Encode/decode consistency ✓")
     
     # Test mask
     mask = encoder.get_valid_actions_mask(cards, [arrangement])
