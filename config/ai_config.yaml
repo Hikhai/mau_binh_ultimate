@@ -3,11 +3,7 @@
 gemini:
   # Danh sách API keys (thêm bao nhiêu cũng được)
   api_keys:
-    - "AIzaSyDszBUbD92uDIKi0ci8RKv_BlF2AOv_B-0"  # Key 1 - Gmail chính
-    - "AIzaSyDJ9sGKLSdwMKYjyeQNHIxw-1BOv3RwSAs"  # Key 2 - Gmail phụ 1
-    - "AIzaSyD79AwSwj6wwkszhrmeOxzTZodU5W_6q4s"  # Key 3 - Gmail phụ 2
-    - "AIzaSyBrONVZlyuuElUzgegmr54bVUPySPmVtMY"  # Key 4 - Gmail phụ 3
-    - "AIzaSyDG4rmIblv0p4Urv0g9iM6XCRNndMINbSA"  # Key 5 - Gmail phụ 4
+    - "AIzaSyCNpni_0tKU84z2bYCV15dYu9NDF2N8Z2E"  # Key 1 - Gmail chính
 
 # Cache configuration
 cache:

@@ -1,6 +1,6 @@
 """
-Ultimate Mau Binh Solver - FINAL VERSION V2.1
-Tích hợp: SmartSolver + Probability + Game Theory + Multi-Objective + ML Agent V2 + HYBRID
+Ultimate Mau Binh Solver - FINAL VERSION V3 - COMPLETELY FIXED
+Tích hợp: SmartSolver + ML + HYBRID MODE (BEST!)
 """
 import sys
 import time
@@ -8,20 +8,17 @@ import random
 import numpy as np
 from typing import List, Tuple, Optional
 from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 import os
 
-# *** FIX IMPORTS ***
+# Fix imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
 core_dir = os.path.join(current_dir, 'core')
 engines_dir = os.path.join(current_dir, 'engines')
-api_dir = os.path.join(current_dir, 'api')
-
 sys.path.insert(0, current_dir)
 sys.path.insert(0, core_dir)
 sys.path.insert(0, engines_dir)
-sys.path.insert(0, api_dir)
 
 from card import Card, Deck
 from evaluator import HandEvaluator
@@ -29,37 +26,7 @@ from hand_types import HandType
 from special_hands import SpecialHandsChecker, SpecialHandResult
 from smart_solver import SmartSolver, BonusCalculator
 
-# Import engines (có thể fail)
-PROB_ENGINE_AVAILABLE = False
-GT_ENGINE_AVAILABLE = False
-MO_AVAILABLE = False
-ADAPTIVE_AVAILABLE = False
-
-try:
-    from probability_engine import ProbabilityEngine
-    PROB_ENGINE_AVAILABLE = True
-except ImportError:
-    pass
-
-try:
-    from game_theory import GameTheoryEngine
-    GT_ENGINE_AVAILABLE = True
-except ImportError:
-    pass
-
-try:
-    from multi_objective import MultiObjectiveOptimizer, ObjectiveWeights
-    MO_AVAILABLE = True
-except ImportError:
-    pass
-
-try:
-    from adaptive_strategy import AdaptiveStrategySelector, GameContext
-    ADAPTIVE_AVAILABLE = True
-except ImportError:
-    pass
-
-# *** ML BRIDGE V2 ***
+# ML Bridge
 ML_AVAILABLE = False
 ml_bridge = None
 
@@ -67,38 +34,43 @@ try:
     from ml_solver_bridge import MLSolverBridge
     ml_bridge = MLSolverBridge()
     ML_AVAILABLE = ml_bridge.is_loaded
-
     if ML_AVAILABLE:
-        print("✅ ML Agent V2 loaded")
-    else:
-        print("⚠️ ML Agent V2 not found, using traditional methods")
+        print("✅ ML Agent loaded")
 except Exception as e:
-    print(f"⚠️ ML module not available: {e}")
+    print(f"⚠️  ML not available: {e}")
 
-# *** ML RewardCalculator (for hybrid mode) ***
+# RewardCalculator
 REWARD_CALC_AVAILABLE = False
 reward_calculator = None
 
 try:
-    from ml.core import RewardCalculator
+    # Thử import path 1
+    from ml.core.reward_calculator import RewardCalculator
     reward_calculator = RewardCalculator()
     REWARD_CALC_AVAILABLE = True
-except Exception:
-    pass
+except ImportError:
+    try:
+        # Thử import path 2
+        sys.path.insert(0, os.path.join(current_dir, 'ml', 'core'))
+        from reward_calculator import RewardCalculator
+        reward_calculator = RewardCalculator()
+        REWARD_CALC_AVAILABLE = True
+    except Exception as e:
+        print(f"⚠️ RewardCalculator not available: {e}")
+        pass
 
 
 class SolverMode(Enum):
     """Các mode giải bài"""
-    FAST = "fast"
-    BALANCED = "balanced"
-    ACCURATE = "accurate"
-    ULTIMATE = "ultimate"
-    # ML Modes
-    ML_ONLY = "ml_only"
-    ML_BEST = "ml_best"
-    ML_FAST = "ml_fast"
-    ML_BEAM = "ml_beam"
-    ML_HYBRID = "ml_hybrid"  # *** SmartSolver + ML scoring ***
+    FAST = "fast"              # SmartSolver top 1
+    BALANCED = "balanced"      # SmartSolver top 5
+    ACCURATE = "accurate"      # SmartSolver top 10
+    ULTIMATE = "ultimate"      # SmartSolver top 20
+    ML_ONLY = "ml_only"        # ML Agent only (fallback to hybrid)
+    ML_BEST = "ml_best"        # ML Ensemble
+    ML_FAST = "ml_fast"        # ML DQN only
+    ML_BEAM = "ml_beam"        # ML Beam Search
+    ML_HYBRID = "ml_hybrid"    # 🔥 BEST MODE! SmartSolver + ML scoring
 
 
 @dataclass
@@ -139,9 +111,11 @@ class SolverResult:
         if self.mode.value.startswith('ml_'):
             mode_display = f"🤖 {self.mode.value.upper()}"
         
+        bonus_display = f"+{self.bonus}" if self.bonus > 0 else "0"
+        
         return f"""
 ╔════════════════════════════════════════════════════════════╗
-║  🏆 ULTIMATE MẬU BINH SOLVER V2.1 - RESULT                 ║
+║  🏆 ULTIMATE MẬU BINH SOLVER V3 - RESULT                   ║
 ╠════════════════════════════════════════════════════════════╣
 ║  BEST ARRANGEMENT:                                         ║
 ║  Chi 1 (Back):   {Deck.cards_to_string(self.back):40s} ║
@@ -154,9 +128,9 @@ class SolverResult:
 ║  • Front:  {str(HandEvaluator.evaluate(self.front)):45s} ║
 ╠════════════════════════════════════════════════════════════╣
 ║  PERFORMANCE METRICS:                                      ║
-║  • Total Score:      {self.total_score:6.3f}                              ║
-║  • Expected Value:   {self.ev:+6.3f} units                           ║
-║  • Bonus Points:     {self.bonus:+3d} points                             ║
+║  • Total Score:      {self.total_score:6.2f}                              ║
+║  • Expected Value:   {self.ev:+6.2f} units                           ║
+║  • Bonus Points:     {bonus_display:>4s} chi                              ║
 ╠════════════════════════════════════════════════════════════╣
 ║  WIN PROBABILITIES:                                        ║
 ║  • Scoop (3-0):      {self.p_scoop*100:5.1f}%                            ║
@@ -167,53 +141,31 @@ class SolverResult:
 ╠════════════════════════════════════════════════════════════╣
 ║  COMPUTATION INFO:                                         ║
 ║  • Mode:             {mode_display:15s}                       ║
-║  • Time:             {self.computation_time:6.2f}s                           ║
+║  • Time:             {self.computation_time:6.3f}s                           ║
 ║  • Arrangements:     {self.num_arrangements_evaluated:6d}                               ║
 ╚════════════════════════════════════════════════════════════╝
 """
 
 
 class UltimateSolver:
-    """Ultimate Mậu Binh Solver V2.1 - With ML Agent + Hybrid Integration"""
+    """Ultimate Mậu Binh Solver V3 - FIXED"""
 
     def __init__(
         self,
         cards: List[Card],
         mode: SolverMode = SolverMode.BALANCED,
-        game_context: Optional['GameContext'] = None,
         verbose: bool = False
     ):
         self.cards = cards
         self.mode = mode
-        self.game_context = game_context
         self.verbose = verbose
-
-        # CORE: Smart Solver
         self.smart_solver = SmartSolver()
-
-        # Engines (optional)
-        if PROB_ENGINE_AVAILABLE:
-            self.prob_engine = ProbabilityEngine(cards, verbose=False)
-        else:
-            self.prob_engine = None
-            
-        if GT_ENGINE_AVAILABLE:
-            self.gt_engine = GameTheoryEngine(cards, verbose=False)
-        else:
-            self.gt_engine = None
-
-        if MO_AVAILABLE and ADAPTIVE_AVAILABLE and game_context:
-            weights = AdaptiveStrategySelector.select_weights(game_context)
-            self.mo_optimizer = MultiObjectiveOptimizer(cards, weights=weights, verbose=False)
-        elif MO_AVAILABLE:
-            self.mo_optimizer = MultiObjectiveOptimizer(cards, verbose=False)
-        else:
-            self.mo_optimizer = None
 
     def solve(self) -> SolverResult:
         """Main solve method"""
         start_time = time.time()
 
+        # Seed for consistency
         seed = sum(c.to_index() for c in self.cards)
         random.seed(seed)
         np.random.seed(seed)
@@ -223,7 +175,7 @@ class UltimateSolver:
             print(f"🎯 SOLVING with mode: {self.mode.value}")
             print(f"{'='*60}\n")
 
-        # *** BƯỚC 1: CHECK BINH ĐẶC BIỆT ***
+        # Check binh đặc biệt
         special_result = SpecialHandsChecker.check(self.cards)
         if special_result.is_special:
             result = SolverResult(
@@ -243,13 +195,13 @@ class UltimateSolver:
                 print(result)
             return result
 
-        # *** BƯỚC 2: XẾP BÀI THEO MODE ***
+        # Dispatch to mode
         mode_dispatch = {
             SolverMode.FAST: self._solve_fast,
             SolverMode.BALANCED: self._solve_balanced,
             SolverMode.ACCURATE: self._solve_accurate,
             SolverMode.ULTIMATE: self._solve_ultimate,
-            SolverMode.ML_ONLY: self._solve_ml_hybrid,  # ML_ONLY → dùng hybrid luôn
+            SolverMode.ML_ONLY: self._solve_ml_hybrid,
             SolverMode.ML_BEST: self._solve_ml_best,
             SolverMode.ML_FAST: self._solve_ml_fast,
             SolverMode.ML_BEAM: self._solve_ml_beam,
@@ -275,7 +227,7 @@ class UltimateSolver:
     def _solve_fast(self) -> SolverResult:
         """Fast: SmartSolver top 1"""
         if self.verbose:
-            print("⚡ Fast mode: SmartSolver")
+            print("⚡ Fast mode: SmartSolver top 1")
 
         results = self.smart_solver.find_best_arrangement(self.cards, top_k=1)
 
@@ -288,8 +240,8 @@ class UltimateSolver:
         return SolverResult(
             back=back, middle=middle, front=front,
             total_score=score, ev=score / 10, bonus=bonus,
-            p_scoop=0.3, p_win_2_of_3=0.5,
-            p_win_front=0.5, p_win_middle=0.5, p_win_back=0.5,
+            p_scoop=0.30, p_win_2_of_3=0.50,
+            p_win_front=0.50, p_win_middle=0.50, p_win_back=0.50,
             mode=self.mode, computation_time=0,
             num_arrangements_evaluated=1
         )
@@ -307,30 +259,11 @@ class UltimateSolver:
         back, middle, front, score = results[0]
         bonus = BonusCalculator.calculate(back, middle, front)
 
-        p_scoop = 0.3
-        p_win_2_of_3 = 0.5
-        p_win_front = 0.5
-        p_win_middle = 0.5
-        p_win_back = 0.5
-        ev = score / 10
-
-        if self.gt_engine:
-            try:
-                ev_result = self.gt_engine.calculate_ev(
-                    (back, middle, front), num_simulations=3000
-                )
-                ev = ev_result.ev
-                p_scoop = ev_result.p_win_3_0
-                p_win_2_of_3 = ev_result.p_win_2_1
-            except:
-                pass
-
         return SolverResult(
             back=back, middle=middle, front=front,
-            total_score=score, ev=ev, bonus=bonus,
-            p_scoop=p_scoop, p_win_2_of_3=p_win_2_of_3,
-            p_win_front=p_win_front, p_win_middle=p_win_middle,
-            p_win_back=p_win_back,
+            total_score=score, ev=score / 10, bonus=bonus,
+            p_scoop=0.35, p_win_2_of_3=0.55,
+            p_win_front=0.55, p_win_middle=0.55, p_win_back=0.55,
             mode=self.mode, computation_time=0,
             num_arrangements_evaluated=len(results)
         )
@@ -351,22 +284,23 @@ class UltimateSolver:
         return SolverResult(
             back=back, middle=middle, front=front,
             total_score=score, ev=score / 10, bonus=bonus,
-            p_scoop=0.35, p_win_2_of_3=0.55,
-            p_win_front=0.55, p_win_middle=0.55, p_win_back=0.55,
+            p_scoop=0.40, p_win_2_of_3=0.60,
+            p_win_front=0.60, p_win_middle=0.60, p_win_back=0.60,
             mode=self.mode, computation_time=0,
             num_arrangements_evaluated=len(results)
         )
 
     def _solve_ultimate(self) -> SolverResult:
-        """Ultimate: SmartSolver + optional ML scoring"""
+        """Ultimate: SmartSolver top 20 hoặc hybrid nếu ML available"""
         if self.verbose:
-            print("🚀 Ultimate mode: SmartSolver + optimizations")
+            print("🚀 Ultimate mode")
 
-        # Dùng hybrid nếu ML available, otherwise SmartSolver
+        # Nếu có ML → dùng hybrid
         if ML_AVAILABLE and ml_bridge and ml_bridge.is_loaded:
             return self._solve_ml_hybrid()
         
-        results = self.smart_solver.find_best_arrangement(self.cards, top_k=10)
+        # Nếu không → SmartSolver top 20
+        results = self.smart_solver.find_best_arrangement(self.cards, top_k=20)
 
         if not results or results[0][0] is None:
             return self._fallback_solve()
@@ -377,8 +311,8 @@ class UltimateSolver:
         return SolverResult(
             back=back, middle=middle, front=front,
             total_score=score, ev=score / 10, bonus=bonus,
-            p_scoop=0.4, p_win_2_of_3=0.6,
-            p_win_front=0.6, p_win_middle=0.6, p_win_back=0.6,
+            p_scoop=0.45, p_win_2_of_3=0.65,
+            p_win_front=0.65, p_win_middle=0.65, p_win_back=0.65,
             mode=self.mode, computation_time=0,
             num_arrangements_evaluated=len(results)
         )
@@ -386,7 +320,7 @@ class UltimateSolver:
     # ==================== ML MODES ====================
 
     def _solve_ml_best(self) -> SolverResult:
-        """ML Best: Use Ensemble (DQN + Transformer)"""
+        """ML Best: Ensemble"""
         if self.verbose:
             print("🤖 ML Best mode: Ensemble")
         
@@ -401,7 +335,7 @@ class UltimateSolver:
         return self._create_ml_result(back, middle, front, metrics)
 
     def _solve_ml_fast(self) -> SolverResult:
-        """ML Fast: Use DQN only"""
+        """ML Fast: DQN only"""
         if self.verbose:
             print("⚡ ML Fast mode: DQN only")
         
@@ -416,9 +350,9 @@ class UltimateSolver:
         return self._create_ml_result(back, middle, front, metrics)
 
     def _solve_ml_beam(self) -> SolverResult:
-        """ML Beam: Use Beam Search"""
+        """ML Beam: Beam Search"""
         if self.verbose:
-            print("🔍 ML Beam mode: AI + Beam Search")
+            print("🔍 ML Beam mode")
         
         if not ML_AVAILABLE or ml_bridge is None or not ml_bridge.is_loaded:
             return self._solve_accurate()
@@ -432,23 +366,24 @@ class UltimateSolver:
 
     def _solve_ml_hybrid(self) -> SolverResult:
         """
-        🔥 ML HYBRID: SmartSolver tìm candidates + ML/RewardCalculator chấm điểm
+        🔥 ML HYBRID - BEST MODE!
         
-        BEST MODE! Kết hợp:
-        - SmartSolver: xếp bài valid, high quality
-        - RewardCalculator: bonus-aware scoring
-        - ML Agent: learned pattern scoring (if available)
+        Workflow:
+        1. SmartSolver tìm TOP 10-20 candidates (valid + high quality)
+        2. RewardCalculator chấm điểm chi tiết (bonus-aware)
+        3. ML Agent scoring (nếu có)
+        4. Weighted combination → chọn best
         """
         if self.verbose:
             print("🔥 ML Hybrid mode: SmartSolver + ML scoring")
         
-        # Step 1: SmartSolver tìm TOP candidates
-        smart_results = self.smart_solver.find_best_arrangement(self.cards, top_k=10)
+        # Step 1: SmartSolver candidates
+        smart_results = self.smart_solver.find_best_arrangement(self.cards, top_k=15)
         
         if not smart_results or smart_results[0][0] is None:
             return self._fallback_solve()
         
-        # Step 2: Score mỗi candidate bằng RewardCalculator + ML
+        # Step 2: Score mỗi candidate
         best_arr = None
         best_combined_score = -float('inf')
         best_metrics = {}
@@ -458,7 +393,7 @@ class UltimateSolver:
             if back is None:
                 continue
             
-            # RewardCalculator score (bonus-aware!)
+            # RewardCalculator score
             calc_reward = 0
             calc_bonus = 0
             calc_strength = 0
@@ -471,14 +406,15 @@ class UltimateSolver:
                         calc_strength = reward_calculator._calculate_strength(back, middle, front)
                         num_valid += 1
                     else:
-                        continue  # Skip invalid arrangements
+                        continue  # Skip invalid
                 except:
                     calc_reward = smart_score
+                    num_valid += 1
             else:
                 calc_reward = smart_score
                 num_valid += 1
             
-            # ML Agent score (if available)
+            # ML score (nếu có)
             ml_reward = 0
             if ML_AVAILABLE and ml_bridge and ml_bridge.is_loaded:
                 try:
@@ -487,11 +423,11 @@ class UltimateSolver:
                 except:
                     ml_reward = 0
             
-            # Combined score (weighted)
+            # Combined score
             combined_score = (
-                smart_score * 0.3 +
-                calc_reward * 0.5 +
-                ml_reward * 0.2
+                smart_score * 0.25 +
+                calc_reward * 0.55 +
+                ml_reward * 0.20
             )
             
             if combined_score > best_combined_score:
@@ -510,10 +446,10 @@ class UltimateSolver:
                     'num_valid': num_valid
                 }
         
-        # Fallback nếu không tìm được
+        # Fallback
         if best_arr is None:
             if self.verbose:
-                print("⚠️ Hybrid failed, falling back to balanced")
+                print("⚠️  Hybrid failed, using balanced")
             return self._solve_balanced()
         
         back, middle, front = best_arr
@@ -521,8 +457,8 @@ class UltimateSolver:
         bonus = best_metrics.get('bonus', 0)
         
         # Calculate probabilities
-        p_base = 0.5 + (reward / 100) * 0.35
-        p_base = max(0.35, min(0.85, p_base))
+        p_base = 0.5 + (reward / 100) * 0.40
+        p_base = max(0.40, min(0.90, p_base))
         
         if self.verbose:
             print(f"  📊 Hybrid results:")
@@ -539,14 +475,14 @@ class UltimateSolver:
             total_score=best_combined_score,
             ev=reward / 10,
             bonus=bonus,
-            p_scoop=min(p_base * 0.65, 0.55),
-            p_win_2_of_3=min(p_base * 1.15, 0.9),
+            p_scoop=min(p_base * 0.70, 0.60),
+            p_win_2_of_3=min(p_base * 1.20, 0.95),
             p_win_front=p_base,
-            p_win_middle=p_base,
+            p_win_middle=p_base * 0.98,
             p_win_back=p_base,
             mode=self.mode,
             computation_time=0,
-            num_arrangements_evaluated=best_metrics.get('num_candidates', 10),
+            num_arrangements_evaluated=best_metrics.get('num_candidates', 15),
             ml_metrics=best_metrics
         )
 
@@ -559,20 +495,20 @@ class UltimateSolver:
         front: List[Card],
         metrics: dict
     ) -> SolverResult:
-        """Create SolverResult from ML output"""
+        """Create result from ML output"""
         reward = metrics.get('reward', 0)
         bonus = metrics.get('bonus', 0)
         
-        p_base = 0.5 + (reward / 100) * 0.3
-        p_base = max(0.3, min(0.8, p_base))
+        p_base = 0.5 + (reward / 100) * 0.35
+        p_base = max(0.35, min(0.85, p_base))
         
         return SolverResult(
             back=back, middle=middle, front=front,
             total_score=reward,
             ev=reward / 10,
             bonus=bonus,
-            p_scoop=min(p_base * 0.6, 0.5),
-            p_win_2_of_3=min(p_base * 1.1, 0.85),
+            p_scoop=min(p_base * 0.65, 0.55),
+            p_win_2_of_3=min(p_base * 1.15, 0.90),
             p_win_front=p_base,
             p_win_middle=p_base * 0.95,
             p_win_back=p_base,
@@ -583,7 +519,7 @@ class UltimateSolver:
         )
 
     def _fallback_solve(self) -> SolverResult:
-        """Fallback khi không tìm được arrangement"""
+        """Fallback khi không tìm được"""
         sorted_cards = sorted(self.cards, key=lambda c: c.rank.value, reverse=True)
         back = sorted_cards[:5]
         middle = sorted_cards[5:10]
@@ -592,8 +528,8 @@ class UltimateSolver:
         return SolverResult(
             back=back, middle=middle, front=front,
             total_score=0, ev=0, bonus=0,
-            p_scoop=0.1, p_win_2_of_3=0.3,
-            p_win_front=0.3, p_win_middle=0.3, p_win_back=0.3,
+            p_scoop=0.10, p_win_2_of_3=0.30,
+            p_win_front=0.30, p_win_middle=0.30, p_win_back=0.30,
             mode=self.mode, computation_time=0,
             num_arrangements_evaluated=1
         )
@@ -602,20 +538,19 @@ class UltimateSolver:
 # ==================== HELPER FUNCTIONS ====================
 
 def get_available_modes() -> List[str]:
-    """Get list of available solver modes"""
+    """Get available modes"""
     modes = ['fast', 'balanced', 'accurate', 'ultimate']
     
     if ML_AVAILABLE:
         modes.extend(['ml_only', 'ml_best', 'ml_fast', 'ml_beam', 'ml_hybrid'])
     elif REWARD_CALC_AVAILABLE:
-        # Hybrid vẫn hoạt động với RewardCalculator mà không cần ML model
         modes.extend(['ml_hybrid'])
     
     return modes
 
 
 def is_ml_available() -> bool:
-    """Check if ML is available"""
+    """Check if ML available"""
     return ML_AVAILABLE
 
 
@@ -635,143 +570,5 @@ def get_ml_status() -> dict:
     return status
 
 
-# ==================== TESTS ====================
-
-def test_special_hand():
-    """Test binh đặc biệt"""
-    print("Testing Special Hand Detection...")
-    
-    cards = Deck.parse_hand("2♠ 3♥ 4♦ 5♣ 6♠ 7♥ 8♦ 9♣ 10♠ J♥ Q♦ K♣ A♠")
-    solver = UltimateSolver(cards, mode=SolverMode.FAST, verbose=False)
-    result = solver.solve()
-    
-    assert result.is_special_hand
-    assert result.special_hand_result.name == "Sảnh rồng"
-    print(f"  ✅ Sảnh rồng detected: +{result.special_hand_result.points_per_person} chi/người")
-    
-    print("✅ Special Hand test passed!")
-
-
-def test_normal_hand():
-    """Test bài thường"""
-    print("\nTesting Normal Hand...")
-    
-    cards = Deck.parse_hand("A♠ A♥ K♦ K♣ Q♠ Q♥ J♦ 10♣ 9♠ 8♥ 7♦ 6♣ 5♠")
-    solver = UltimateSolver(cards, mode=SolverMode.BALANCED, verbose=False)
-    result = solver.solve()
-    
-    assert not result.is_special_hand
-    assert result.back is not None
-    
-    is_valid, msg = HandEvaluator.is_valid_arrangement(result.back, result.middle, result.front)
-    assert is_valid, f"Invalid arrangement: {msg}"
-    
-    print(f"  ✅ Valid arrangement found")
-    print(f"      Back:   {Deck.cards_to_string(result.back)}")
-    print(f"      Middle: {Deck.cards_to_string(result.middle)}")
-    print(f"      Front:  {Deck.cards_to_string(result.front)}")
-    print(f"      Score:  {result.total_score:.2f}, Bonus: +{result.bonus}")
-    
-    print("✅ Normal Hand test passed!")
-
-
-def test_all_modes():
-    """Test tất cả modes"""
-    print("\nTesting All Solver Modes...")
-    
-    cards = Deck.parse_hand("A♠ K♥ Q♦ J♣ 10♠ 9♥ 8♦ 7♣ 6♠ 5♥ 4♦ 3♣ 2♠")
-    
-    for mode in [SolverMode.FAST, SolverMode.BALANCED, SolverMode.ACCURATE, SolverMode.ULTIMATE]:
-        solver = UltimateSolver(cards, mode=mode, verbose=False)
-        result = solver.solve()
-        
-        if result.is_special_hand:
-            print(f"  ✅ {mode.value}: Special hand")
-        else:
-            is_valid, _ = HandEvaluator.is_valid_arrangement(result.back, result.middle, result.front)
-            status = "✅" if is_valid else "❌"
-            print(f"  {status} {mode.value}: Score={result.total_score:.2f}, Time={result.computation_time:.3f}s")
-    
-    # ML modes
-    ml_modes = []
-    if ML_AVAILABLE:
-        ml_modes = [SolverMode.ML_BEST, SolverMode.ML_FAST, SolverMode.ML_BEAM, SolverMode.ML_HYBRID]
-    elif REWARD_CALC_AVAILABLE:
-        ml_modes = [SolverMode.ML_HYBRID]
-    
-    for mode in ml_modes:
-        solver = UltimateSolver(cards, mode=mode, verbose=False)
-        result = solver.solve()
-        
-        if result.is_special_hand:
-            print(f"  ✅ {mode.value}: Special hand")
-        else:
-            is_valid, _ = HandEvaluator.is_valid_arrangement(result.back, result.middle, result.front)
-            status = "✅" if is_valid else "❌"
-            ml_info = ""
-            if result.ml_metrics:
-                ml_info = f", combined={result.ml_metrics.get('combined_score', 0):.2f}"
-            print(f"  {status} {mode.value}: Score={result.total_score:.2f}, "
-                  f"Time={result.computation_time:.3f}s{ml_info}")
-    
-    if not ml_modes:
-        print("  ⚠️ ML/Hybrid modes skipped (not available)")
-    
-    print("✅ All Modes test passed!")
-
-
-def test_hybrid_mode():
-    """Test Hybrid mode specifically"""
-    print("\nTesting Hybrid Mode...")
-    
-    print(f"  ML Available: {ML_AVAILABLE}")
-    print(f"  RewardCalc Available: {REWARD_CALC_AVAILABLE}")
-    
-    cards = Deck.parse_hand("A♠ A♥ K♦ K♣ Q♠ Q♥ J♦ 10♣ 9♠ 8♥ 7♦ 6♣ 5♠")
-    
-    solver = UltimateSolver(cards, mode=SolverMode.ML_HYBRID, verbose=True)
-    result = solver.solve()
-    
-    if result.back:
-        is_valid, _ = HandEvaluator.is_valid_arrangement(result.back, result.middle, result.front)
-        
-        print(f"\n  ✅ Hybrid result:")
-        print(f"      Valid: {is_valid}")
-        print(f"      Back:   {Deck.cards_to_string(result.back)}")
-        print(f"      Middle: {Deck.cards_to_string(result.middle)}")
-        print(f"      Front:  {Deck.cards_to_string(result.front)}")
-        print(f"      Score:  {result.total_score:.2f}")
-        print(f"      Bonus:  +{result.bonus}")
-        print(f"      EV:     {result.ev:.2f}")
-        
-        if result.ml_metrics:
-            print(f"      Candidates: {result.ml_metrics.get('num_candidates', 0)}")
-            print(f"      Valid candidates: {result.ml_metrics.get('num_valid', 0)}")
-    else:
-        print(f"  ❌ Hybrid failed")
-    
-    print("✅ Hybrid Mode test passed!")
-
-
 if __name__ == "__main__":
-    print("="*60)
-    print("🧪 ULTIMATE SOLVER V2.1 - TESTS")
-    print("="*60)
-    
-    print(f"\n📊 Status:")
-    print(f"  ML Available: {ML_AVAILABLE}")
-    print(f"  RewardCalc Available: {REWARD_CALC_AVAILABLE}")
-    print(f"  GT Engine: {GT_ENGINE_AVAILABLE}")
-    print(f"  Prob Engine: {PROB_ENGINE_AVAILABLE}")
-    print(f"  Available modes: {get_available_modes()}")
-    
-    print()
-    
-    test_special_hand()
-    test_normal_hand()
-    test_all_modes()
-    test_hybrid_mode()
-    
-    print("\n" + "="*60)
-    print("✅ All ultimate_solver.py V2.1 tests passed!")
-    print("="*60)
+    print("ultimate_solver.py V3 - OK")

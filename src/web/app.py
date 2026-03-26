@@ -1,7 +1,7 @@
 """
-Professional Streamlit Web App for Mau Binh Solver V2.1
+Professional Streamlit Web App for Mau Binh Solver V2.2
 Production-ready with ML Agent V2, Hybrid Mode, Analytics, Beautiful Card Display
-✅ Features: Type, Pick, Screenshot, ML Agent, Hybrid Mode, Compare Modes
+✅ FIXED: All use_container_width warnings
 """
 import streamlit as st
 import sys
@@ -10,6 +10,8 @@ from datetime import datetime
 import time
 import json
 from pathlib import Path
+import base64
+from io import BytesIO
 
 
 # ===== COMPATIBILITY FIX =====
@@ -48,17 +50,42 @@ VISUAL_CARDS_AVAILABLE = False
 try:
     from card_renderer import render_comparison_cards, render_input_cards_preview, get_card_html
     VISUAL_CARDS_AVAILABLE = True
-except ImportError:
-    print("⚠️ Visual card components not found.")
+except ImportError as e:
+    print(f"⚠️ Visual card components not found: {e}")
 
 
 # ===== IMAGE INPUT =====
 IMAGE_INPUT_AVAILABLE = False
+_image_import_error = None
+
 try:
     from components.image_input import image_input_component
     IMAGE_INPUT_AVAILABLE = True
-except Exception:
+except ImportError:
     pass
+
+if not IMAGE_INPUT_AVAILABLE:
+    try:
+        from image_input import image_input_component
+        IMAGE_INPUT_AVAILABLE = True
+    except ImportError:
+        pass
+
+if not IMAGE_INPUT_AVAILABLE:
+    try:
+        import importlib.util
+        image_input_path = os.path.join(current_dir, 'components', 'image_input.py')
+        if os.path.exists(image_input_path):
+            spec = importlib.util.spec_from_file_location("image_input", image_input_path)
+            image_input_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(image_input_mod)
+            image_input_component = image_input_mod.image_input_component
+            IMAGE_INPUT_AVAILABLE = True
+    except Exception as e:
+        _image_import_error = str(e)
+
+if not IMAGE_INPUT_AVAILABLE:
+    print(f"⚠️ Image input component not available. Error: {_image_import_error}")
 
 
 # ===== CARD PICKER =====
@@ -66,8 +93,156 @@ PICKER_AVAILABLE = False
 try:
     from card_picker import interactive_card_picker, quick_select_buttons
     PICKER_AVAILABLE = True
-except Exception:
+except ImportError:
     pass
+if not PICKER_AVAILABLE:
+    try:
+        from components.card_picker import interactive_card_picker, quick_select_buttons
+        PICKER_AVAILABLE = True
+    except ImportError:
+        pass
+
+
+# ===== FALLBACK IMAGE INPUT =====
+def fallback_image_input(key="fallback_image"):
+    """Fallback khi image_input_component không available."""
+    st.markdown("""
+    <div style="
+        background: linear-gradient(135deg, #667eea22 0%, #764ba222 100%);
+        border: 2px dashed #667eea;
+        border-radius: 16px;
+        padding: 2rem;
+        text-align: center;
+        margin-bottom: 1rem;
+    ">
+        <h3 style="color: #667eea; margin-bottom: 0.5rem;">📷 Upload or Paste Screenshot</h3>
+        <p style="color: #666;">
+            Upload ảnh bài hoặc chụp màn hình rồi paste (Ctrl+V)<br>
+            <small>Hỗ trợ: PNG, JPG, JPEG</small>
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    uploaded_file = st.file_uploader(
+        "Upload ảnh bài",
+        type=['png', 'jpg', 'jpeg', 'webp'],
+        key=f"{key}_uploader",
+        help="Kéo thả ảnh hoặc click để chọn file.",
+        label_visibility="collapsed",
+    )
+
+    use_camera = st.checkbox("📸 Dùng camera", key=f"{key}_camera_toggle")
+    camera_image = None
+    if use_camera:
+        camera_image = st.camera_input("Chụp ảnh bài", key=f"{key}_camera")
+
+    # Paste zone HTML
+    st.components.v1.html("""
+    <div id="paste-zone" class="paste-zone" tabindex="0" onclick="this.focus()"
+         style="border: 2px dashed #aaa; border-radius: 12px; padding: 40px 20px;
+                text-align: center; cursor: pointer; background: #fafafa; margin: 10px 0; outline: none;">
+        <div style="font-size: 3rem; margin-bottom: 10px;">📋</div>
+        <p><b>Click here</b>, then press <b>Ctrl+V</b> to paste screenshot</p>
+        <p style="font-size: 0.85rem; color: #aaa; margin-top: 8px;">
+            Chụp màn hình game → Ctrl+V paste vào đây
+        </p>
+        <div id="paste-preview" style="margin-top: 15px;"></div>
+    </div>
+    <script>
+    const pasteZone = document.getElementById('paste-zone');
+    const preview = document.getElementById('paste-preview');
+    pasteZone.addEventListener('paste', function(e) {
+        e.preventDefault();
+        const items = e.clipboardData.items;
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf('image') !== -1) {
+                const blob = items[i].getAsFile();
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    preview.innerHTML = '<img src="' + event.target.result +
+                        '" style="max-width:100%;max-height:300px;border-radius:8px;margin-top:10px;">';
+                    pasteZone.style.borderColor = '#11998e';
+                    pasteZone.style.background = '#11998e11';
+                };
+                reader.readAsDataURL(blob);
+                break;
+            }
+        }
+    });
+    pasteZone.addEventListener('focus', function() {
+        pasteZone.style.borderColor = '#667eea';
+        pasteZone.style.background = '#667eea11';
+    });
+    pasteZone.addEventListener('blur', function() {
+        pasteZone.style.borderColor = '#aaa';
+        pasteZone.style.background = '#fafafa';
+    });
+    </script>
+    """, height=250)
+
+    image_to_process = None
+    if uploaded_file is not None:
+        image_to_process = uploaded_file
+        st.image(uploaded_file, caption="📷 Ảnh đã upload", width="stretch")
+    elif camera_image is not None:
+        image_to_process = camera_image
+        st.image(camera_image, caption="📸 Ảnh từ camera", width="stretch")
+
+    if image_to_process is not None:
+        detected = _try_detect_cards_from_image(image_to_process)
+        if detected:
+            return detected
+
+    return None
+
+
+def _try_detect_cards_from_image(image_data):
+    """Thử detect cards từ image data."""
+    try:
+        from card_detector import CardDetector
+        detector = CardDetector()
+
+        from PIL import Image
+        import numpy as np
+
+        if hasattr(image_data, 'read'):
+            img = Image.open(image_data)
+        else:
+            img = Image.open(BytesIO(image_data))
+
+        img_array = np.array(img)
+        cards = detector.detect(img_array)
+
+        if cards and len(cards) == 13:
+            card_str = " ".join(str(c) for c in cards)
+            st.success(f"✅ Detected 13 cards: {card_str}")
+            return card_str
+        elif cards:
+            card_str = " ".join(str(c) for c in cards)
+            st.warning(f"⚠️ Detected {len(cards)}/13 cards: {card_str}")
+            st.info("Hãy nhập thêm các lá còn thiếu")
+            corrected = st.text_input("Sửa kết quả detect:", value=card_str, key="correct_detection")
+            if st.button("✅ Confirm", key="confirm_detection"):
+                return corrected
+        else:
+            st.warning("⚠️ Không detect được lá bài nào")
+
+    except ImportError:
+        st.info("🔍 ML Card Detector chưa cài. Dùng manual input:")
+    except Exception as e:
+        st.warning(f"⚠️ Detection error: {e}")
+
+    st.markdown("---")
+    st.markdown("**✍️ Nhập cards thủ công từ ảnh:**")
+    manual_cards = st.text_input(
+        "Nhập 13 lá bài nhìn thấy trong ảnh:",
+        placeholder="AS KH QD JC 10S 9H 8D 7C 6S 5H 4D 3C 2S",
+        key="manual_from_image"
+    )
+    if manual_cards and st.button("✅ Use these cards", key="use_manual_cards"):
+        return manual_cards
+
+    return None
 
 
 # ============== PAGE CONFIG ==============
@@ -115,7 +290,6 @@ st.markdown("""
         font-weight: bold;
     }
     .stButton>button {
-        width: 100%;
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
         font-weight: 700;
@@ -134,9 +308,7 @@ st.markdown("""
     .stProgress > div > div > div {
         background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
     }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
     .stTabs [data-baseweb="tab"] {
         background-color: #f0f2f6;
         border-radius: 8px;
@@ -148,12 +320,8 @@ st.markdown("""
         color: white;
     }
     @media (max-width: 768px) {
-        .main-header {
-            font-size: 2.2rem !important;
-        }
-        .sub-header {
-            font-size: 1rem !important;
-        }
+        .main-header { font-size: 2.2rem !important; }
+        .sub-header { font-size: 1rem !important; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -226,12 +394,10 @@ with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/000000/playing-cards.png", width=80)
     st.markdown("## ⚙️ Settings")
 
-    # ===== MODE SELECTION =====
     st.markdown("### 🎯 Solver Mode")
 
     mode_options = {}
 
-    # ML/Hybrid modes (if available)
     if ML_AVAILABLE:
         mode_options["🔥 ML Hybrid (Best!)"] = ("ml_hybrid", "2-5s", "🔥 SmartSolver + AI scoring = Best!")
         mode_options["🤖 ML Agent (Best)"] = ("ml_best", "~50ms", "AI Ensemble")
@@ -240,13 +406,11 @@ with st.sidebar:
     elif REWARD_CALC_AVAILABLE:
         mode_options["🔥 ML Hybrid"] = ("ml_hybrid", "2-5s", "🔥 SmartSolver + Bonus scoring")
 
-    # Traditional modes
     mode_options["⚡ Fast"] = ("fast", "<1s", "Quick decisions")
     mode_options["⚖️ Balanced"] = ("balanced", "2-5s", "✨ Recommended")
     mode_options["🎯 Accurate"] = ("accurate", "10-20s", "Maximum accuracy")
     mode_options["🚀 Ultimate"] = ("ultimate", "30-60s", "Best traditional")
 
-    # Default to hybrid if available, otherwise balanced
     default_idx = 0 if (ML_AVAILABLE or REWARD_CALC_AVAILABLE) else len(mode_options) - 3
 
     selected_mode = st.selectbox(
@@ -265,9 +429,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # ===== AI STATUS =====
     st.markdown("### 🤖 AI Status")
-
     ml_status = get_ml_status()
 
     if ml_status.get('model_loaded'):
@@ -282,7 +444,6 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # ===== STATISTICS =====
     st.markdown("### 📊 Statistics")
     col1, col2 = st.columns(2)
     with col1:
@@ -297,7 +458,6 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # ===== STATUS =====
     st.markdown("### 📡 Components")
     status_items = [
         ("ML Agent", ML_AVAILABLE),
@@ -328,7 +488,6 @@ with st.sidebar:
 
 
 # ============== MAIN CONTENT ==============
-# Example hands
 with st.expander("📝 Example Hands (Click to use)", expanded=False):
     col1, col2, col3 = st.columns(3)
     examples = {
@@ -339,7 +498,7 @@ with st.expander("📝 Example Hands (Click to use)", expanded=False):
     for i, (name, cards) in enumerate(examples.items()):
         col = [col1, col2, col3][i]
         with col:
-            if st.button(name, key=f"ex_{i}", use_container_width=True):
+            if st.button(name, key=f"ex_{i}"):
                 st.session_state.card_input = cards
                 st.session_state.cards_ready_from_picker = False
                 st.session_state.cards_from_image = False
@@ -352,19 +511,11 @@ st.markdown("## 📥 Input Your Cards")
 solve_button = False
 card_input = st.session_state.card_input
 
-# Create tabs
-if IMAGE_INPUT_AVAILABLE and PICKER_AVAILABLE:
-    tab1, tab2, tab3 = st.tabs(["✍️ Type Cards", "🎴 Click to Pick", "📷 Screenshot (Ctrl+V)"])
-elif IMAGE_INPUT_AVAILABLE:
-    tab1, tab3 = st.tabs(["✍️ Type Cards", "📷 Screenshot (Ctrl+V)"])
-    tab2 = None
-elif PICKER_AVAILABLE:
-    tab1, tab2 = st.tabs(["✍️ Type Cards", "🎴 Click to Pick"])
-    tab3 = None
-else:
-    tab1 = st.container()
-    tab2 = None
-    tab3 = None
+tab1, tab2, tab3 = st.tabs([
+    "✍️ Type Cards",
+    "🎴 Click to Pick",
+    "📷 Screenshot (Ctrl+V)"
+])
 
 
 # TAB 1: Type Cards
@@ -380,26 +531,26 @@ with tab1:
         )
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🚀 SOLVE", type="primary", use_container_width=True, key="solve_type"):
+        if st.button("🚀 SOLVE", type="primary", key="solve_type"):
             card_input = typed_input
             solve_button = True
             st.session_state.cards_ready_from_picker = False
             st.session_state.cards_from_image = False
 
 
-# TAB 2: Pick
-if tab2 is not None:
-    with tab2:
+# TAB 2: Pick Cards
+with tab2:
+    if PICKER_AVAILABLE:
         if st.session_state.cards_ready_from_picker and st.session_state.card_input:
             st.success("✅ Cards selected!")
             st.code(st.session_state.card_input, language=None)
             col1, col2 = st.columns(2)
             with col1:
-                if st.button("🚀 SOLVE NOW", type="primary", use_container_width=True, key="solve_pick"):
+                if st.button("🚀 SOLVE NOW", type="primary", key="solve_pick"):
                     card_input = st.session_state.card_input
                     solve_button = True
             with col2:
-                if st.button("🔄 Pick Different", use_container_width=True, key="pick_different"):
+                if st.button("🔄 Pick Different", key="pick_different"):
                     st.session_state.cards_ready_from_picker = False
                     st.session_state.picker_selected_cards = []
                     rerun()
@@ -410,30 +561,58 @@ if tab2 is not None:
                 st.session_state.cards_ready_from_picker = True
                 st.session_state.cards_from_image = False
                 rerun()
+    else:
+        st.info("🎴 Card Picker component chưa load được. Dùng text input:")
+        st.markdown("""
+        **Quick reference:**
+        | Suit | Code | | Rank | Code |
+        |------|------|-|------|------|
+        | ♠ Spades | S | | Ace | A |
+        | ♥ Hearts | H | | King | K |
+        | ♦ Diamonds | D | | Queen | Q |
+        | ♣ Clubs | C | | Jack | J |
+        """)
+        fallback_pick = st.text_input(
+            "Enter 13 cards:",
+            placeholder="AS KH QD JC 10S 9H 8D 7C 6S 5H 4D 3C 2S",
+            key="fallback_picker_input"
+        )
+        if fallback_pick and st.button("🚀 SOLVE", key="solve_fallback_pick"):
+            card_input = fallback_pick
+            solve_button = True
 
 
-# TAB 3: Screenshot
-if tab3 is not None:
-    with tab3:
-        if st.session_state.cards_from_image and st.session_state.card_input:
-            st.success("✅ 13 cards detected!")
-            st.code(st.session_state.card_input, language=None)
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🚀 SOLVE NOW", type="primary", use_container_width=True, key="solve_image"):
-                    card_input = st.session_state.card_input
-                    solve_button = True
-            with col2:
-                if st.button("📷 Detect Different", use_container_width=True, key="new_image"):
-                    st.session_state.cards_from_image = False
-                    rerun()
-        else:
-            detected_cards = image_input_component(key="main_image_input")
-            if detected_cards:
-                st.session_state.card_input = detected_cards
-                st.session_state.cards_from_image = True
-                st.session_state.cards_ready_from_picker = False
+# TAB 3: Screenshot / Paste Image
+with tab3:
+    if st.session_state.cards_from_image and st.session_state.card_input:
+        st.success("✅ 13 cards detected!")
+        st.code(st.session_state.card_input, language=None)
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🚀 SOLVE NOW", type="primary", key="solve_image"):
+                card_input = st.session_state.card_input
+                solve_button = True
+        with col2:
+            if st.button("📷 Detect Different", key="new_image"):
+                st.session_state.cards_from_image = False
                 rerun()
+    else:
+        detected_cards = None
+
+        if IMAGE_INPUT_AVAILABLE:
+            try:
+                detected_cards = image_input_component(key="main_image_input")
+            except Exception as e:
+                st.warning(f"⚠️ Image component error: {e}")
+                detected_cards = fallback_image_input(key="main_fallback")
+        else:
+            detected_cards = fallback_image_input(key="main_fallback")
+
+        if detected_cards:
+            st.session_state.card_input = detected_cards
+            st.session_state.cards_from_image = True
+            st.session_state.cards_ready_from_picker = False
+            rerun()
 
 
 # ============== SOLVE ==============
@@ -452,19 +631,16 @@ if solve_button and card_input:
         if len(cards) != 13:
             st.error(f"❌ Need exactly 13 cards, got {len(cards)}")
         else:
-            # Preview input
             if VISUAL_CARDS_AVAILABLE:
                 st.markdown("### 🎴 Your Input Cards")
                 st.markdown(render_input_cards_preview([str(c) for c in cards]), unsafe_allow_html=True)
 
-            # Progress
             progress_bar = st.progress(0)
             status_text = st.empty()
 
             status_text.text(f"🤖 Solving with {selected_mode}...")
             progress_bar.progress(30)
 
-            # Solve!
             solver_mode = SolverMode(mode_value)
             solver = UltimateSolver(cards, mode=solver_mode, verbose=False)
             result = solver.solve()
@@ -475,14 +651,11 @@ if solve_button and card_input:
             progress_bar.empty()
             status_text.empty()
 
-            # Log
             log_solve(mode_value, card_input, result)
 
-            # ===== DISPLAY RESULTS =====
             st.success("✅ **OPTIMAL SOLUTION FOUND!**")
             st.markdown("---")
 
-            # Arrangement
             st.markdown("## 🎯 Optimal Arrangement")
 
             back_eval = HandEvaluator.evaluate(result.back)
@@ -513,7 +686,6 @@ if solve_button and card_input:
 
             st.markdown("---")
 
-            # Metrics
             st.markdown("## 📊 Performance Metrics")
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Expected Value", f"{result.ev:+.2f}")
@@ -525,7 +697,6 @@ if solve_button and card_input:
 
             st.markdown("---")
 
-            # Win probability
             st.markdown("## 📈 Win Probability Breakdown")
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -541,7 +712,6 @@ if solve_button and card_input:
                 st.progress(min(result.p_win_front, 1.0))
                 st.write(f"{result.p_win_front*100:.1f}%")
 
-            # Assessment
             total_score = result.p_win_front * 40 + result.p_win_middle * 30 + result.p_win_back * 30
             st.markdown("### 🎯 Overall Assessment")
             if total_score >= 70:
@@ -555,7 +725,6 @@ if solve_button and card_input:
 
             st.markdown("---")
 
-            # ML/Hybrid info
             if result.mode.value.startswith('ml_') and result.ml_metrics:
                 st.markdown("### 🤖 AI Analysis")
                 m = result.ml_metrics
@@ -578,7 +747,6 @@ if solve_button and card_input:
 
             st.markdown("---")
 
-            # Recommendations
             st.markdown("## 💡 Strategic Recommendations")
             recs = []
             if result.p_scoop > 0.3:
@@ -598,7 +766,6 @@ if solve_button and card_input:
 
             st.markdown("---")
 
-            # Details
             with st.expander("📈 Detailed Analysis"):
                 col1, col2 = st.columns(2)
                 with col1:
@@ -616,7 +783,6 @@ if solve_button and card_input:
 
             st.markdown("---")
 
-            # Actions
             st.markdown("### 📤 Actions")
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -631,14 +797,14 @@ if solve_button and card_input:
                 )
                 st.download_button("📥 Download", data=export_text,
                                    file_name=f"maubinh_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                                   mime="text/plain", use_container_width=True)
+                                   mime="text/plain")
             with col2:
-                if st.button("🔄 Solve Another", use_container_width=True, key="solve_another"):
+                if st.button("🔄 Solve Another", key="solve_another"):
                     st.session_state.cards_from_image = False
                     st.session_state.cards_ready_from_picker = False
                     rerun()
             with col3:
-                if st.button("🔀 Try Different Mode", use_container_width=True):
+                if st.button("🔀 Try Different Mode"):
                     st.info("👈 Select a different mode in sidebar")
 
             st.session_state.daily_usage['count'] += 1
@@ -672,14 +838,6 @@ with col3:
 st.markdown(
     '<p style="text-align:center;color:#999;margin-top:2rem;font-size:0.9rem;">'
     'Made with ❤️ using Python, PyTorch & Streamlit<br>'
-    '© 2024 Mau Binh AI Solver Pro • ML Agent V2.1'
+    '© 2024 Mau Binh AI Solver Pro • ML Agent V2.2'
     '</p>', unsafe_allow_html=True
 )
-
-if os.getenv('DEBUG', 'false').lower() == 'true':
-    with st.expander("🔧 Debug"):
-        st.json({
-            'solve_count': st.session_state.solve_count,
-            'ml_status': get_ml_status(),
-            'available_modes': get_available_modes(),
-        })
