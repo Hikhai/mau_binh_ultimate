@@ -23,3 +23,14 @@ data/logs/
 
 # YOLO models (large files)
 models/card_detector/*.pt
+
+# Data files (training data, models)
+data/training/*.pkl
+data/models/
+data/cache/
+data/logs/
+
+# NHƯNG KHÔNG IGNORE code Python!
+# Đảm bảo src/ml/data/ (code) KHÔNG bị ignore
+!src/ml/data/
+!src/ml/data/*.py

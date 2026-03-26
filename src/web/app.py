@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.join(parent_dir, 'ml'))
 sys.path.insert(0, parent_dir)
 sys.path.insert(0, os.path.join(current_dir, 'components'))
 
+
 # ===== CORE IMPORTS =====
 from card import Deck
 from evaluator import HandEvaluator
@@ -41,6 +42,7 @@ from ultimate_solver import (
     get_available_modes, get_ml_status
 )
 
+
 # ===== VISUAL COMPONENTS =====
 VISUAL_CARDS_AVAILABLE = False
 try:
@@ -49,6 +51,7 @@ try:
 except ImportError:
     print("⚠️ Visual card components not found.")
 
+
 # ===== IMAGE INPUT =====
 IMAGE_INPUT_AVAILABLE = False
 try:
@@ -56,6 +59,7 @@ try:
     IMAGE_INPUT_AVAILABLE = True
 except Exception:
     pass
+
 
 # ===== CARD PICKER =====
 PICKER_AVAILABLE = False
@@ -67,7 +71,6 @@ except Exception:
 
 
 # ============== PAGE CONFIG ==============
-
 st.set_page_config(
     page_title="Mau Binh AI Solver Pro",
     page_icon="🃏",
@@ -75,8 +78,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ============== CUSTOM CSS ==============
 
+# ============== CUSTOM CSS ==============
 st.markdown("""
 <style>
     .main-header {
@@ -131,7 +134,9 @@ st.markdown("""
     .stProgress > div > div > div {
         background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
     }
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
     .stTabs [data-baseweb="tab"] {
         background-color: #f0f2f6;
         border-radius: 8px;
@@ -143,15 +148,18 @@ st.markdown("""
         color: white;
     }
     @media (max-width: 768px) {
-        .main-header { font-size: 2.2rem !important; }
-        .sub-header { font-size: 1rem !important; }
+        .main-header {
+            font-size: 2.2rem !important;
+        }
+        .sub-header {
+            font-size: 1rem !important;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ============== SESSION STATE ==============
-
 if 'solve_count' not in st.session_state:
     st.session_state.solve_count = 0
 if 'history' not in st.session_state:
@@ -172,7 +180,6 @@ FREE_DAILY_LIMIT = 99999
 
 
 # ============== HELPER FUNCTIONS ==============
-
 def check_usage_limit(mode):
     if st.session_state.daily_usage['count'] >= FREE_DAILY_LIMIT:
         return False, "Daily limit reached!"
@@ -203,7 +210,6 @@ def log_solve(mode, cards_input, result, error=None):
 
 
 # ============== HEADER ==============
-
 st.markdown('<h1 class="main-header">🃏 Mậu Binh AI Solver Pro</h1>', unsafe_allow_html=True)
 st.markdown(
     '<p class="sub-header">'
@@ -216,7 +222,6 @@ st.markdown("---")
 
 
 # ============== SIDEBAR ==============
-
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/000000/playing-cards.png", width=80)
     st.markdown("## ⚙️ Settings")
@@ -321,8 +326,8 @@ with st.sidebar:
         **Card Format:** `AS KH QD JC 10S`
         """)
 
-# ============== MAIN CONTENT ==============
 
+# ============== MAIN CONTENT ==============
 # Example hands
 with st.expander("📝 Example Hands (Click to use)", expanded=False):
     col1, col2, col3 = st.columns(3)
@@ -339,6 +344,7 @@ with st.expander("📝 Example Hands (Click to use)", expanded=False):
                 st.session_state.cards_ready_from_picker = False
                 st.session_state.cards_from_image = False
                 rerun()
+
 
 # ===== INPUT SECTION =====
 st.markdown("## 📥 Input Your Cards")
@@ -360,6 +366,7 @@ else:
     tab2 = None
     tab3 = None
 
+
 # TAB 1: Type Cards
 with tab1:
     col1, col2 = st.columns([4, 1])
@@ -379,11 +386,12 @@ with tab1:
             st.session_state.cards_ready_from_picker = False
             st.session_state.cards_from_image = False
 
+
 # TAB 2: Pick
 if tab2 is not None:
     with tab2:
         if st.session_state.cards_ready_from_picker and st.session_state.card_input:
-            st.success("✅ **Cards selected!**")
+            st.success("✅ Cards selected!")
             st.code(st.session_state.card_input, language=None)
             col1, col2 = st.columns(2)
             with col1:
@@ -403,11 +411,12 @@ if tab2 is not None:
                 st.session_state.cards_from_image = False
                 rerun()
 
+
 # TAB 3: Screenshot
 if tab3 is not None:
     with tab3:
         if st.session_state.cards_from_image and st.session_state.card_input:
-            st.success("✅ **13 cards detected!**")
+            st.success("✅ 13 cards detected!")
             st.code(st.session_state.card_input, language=None)
             col1, col2 = st.columns(2)
             with col1:
@@ -428,7 +437,6 @@ if tab3 is not None:
 
 
 # ============== SOLVE ==============
-
 if solve_button and card_input:
     can_solve, error_msg = check_usage_limit(mode_value)
     if not can_solve:
@@ -645,13 +653,12 @@ if solve_button and card_input:
 
 
 # ============== FOOTER ==============
-
 st.markdown("---")
 col1, col2, col3 = st.columns(3)
 
 with col1:
     st.markdown("### 📚 Resources")
-    st.markdown("- [📖 How to Play](https://en.wikipedia.org/wiki/Chinese_poker)")
+    st.markdown("- 📖 How to Play")
 
 with col2:
     st.markdown("### ⚡ Technology")
